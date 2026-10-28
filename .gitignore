@@ -1,0 +1,40 @@
+# deps
+node_modules
+.pnpm-store
+
+# build
+.output
+.nuxt
+.nitro
+.cache
+dist
+
+# env（含数据库口令，绝对不要提交）
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+logs
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# local data
+data
+tmp
+
+# wrangler local secrets
+.dev.vars
+.wrangler
+
+# build outputs for platforms
+.vercel
+.output
+

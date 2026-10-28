@@ -1,0 +1,43 @@
+# Cloudflare Workers 部署配置
+# 构建：nuxt build --preset cloudflare-module   →  .output/server/index.mjs
+# 部署：npm run deploy:cf
+#
+# ⚠️ 实测结论（2026-10，wrangler dev/workerd）：
+#   · /api/health 与首次 /api/trending 能连通 Atlas（冷启动约 5s）
+#   · 但同进程后续请求会被 runtime 判定 hung（跨请求复用 mongodb 连接池受限）
+#   → 生产建议「Cloudflare Pages 前端 + Vercel 后端」（README 方案 C）。
+#     本文件保留用于：只跑 cron 抓取，或自行复现验证。
+#
+# Workers 没有常驻进程，定时抓取靠下面的 [triggers] crons（scheduled 事件），
+# server/plugins/scheduler.ts 会自动挂载 cloudflare:scheduled 钩子。
+# ENABLE_INTERNAL_SCHEDULER 保持 auto 即可（Workers 上自动判定为关闭 setInterval）。
+
+name = "github-trending-daily"
+main = ".output/server/index.mjs"
+compatibility_date = "2025-01-01"
+
+# mongodb driver 需要 Node 兼容层才能拿到 net/tls
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = ".output/public"
+binding = "ASSETS"
+
+# 每小时第 0 分钟触发一次。改频率请同步改 UPDATE_INTERVAL_MINUTES（仅用于前端文案展示）。
+[triggers]
+crons = ["0 * * * *"]
+
+[observability]
+enabled = true
+
+# 环境变量请用 wrangler secret / dashboard 注入，不要写在这个文件里：
+#   wrangler secret put MONGODB_URI
+#   wrangler secret put MONGODB_DB
+#   wrangler secret put CRON_SECRET
+#
+# [vars]
+# NODE_ENV = "production"
+# MONGODB_DB = "github_trending"
+# APP_TIMEZONE = "Asia/Shanghai"
+# UPDATE_INTERVAL_MINUTES = "60"
+# ENABLE_INTERNAL_SCHEDULER = "auto"

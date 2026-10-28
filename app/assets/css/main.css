@@ -1,0 +1,121 @@
+/* ===== 设计令牌 ===== */
+:root {
+  --bg: #f4f7fb;
+  --bg-deco: radial-gradient(1200px 600px at 15% -10%, #e8f0ff 0%, rgba(232, 240, 255, 0) 60%),
+    radial-gradient(900px 500px at 95% 0%, #f0ecff 0%, rgba(240, 236, 255, 0) 55%);
+  --card: #ffffff;
+  --card-soft: #fbfcfe;
+  --text: #0d1526;
+  --text-2: #334155;
+  --muted: #6b7a90;
+  --line: #e7edf5;
+  --line-strong: #d8e2ee;
+  --brand: #1f6feb;
+  --brand-soft: #eaf2ff;
+  --green: #16a34a;
+  --green-soft: #e8f8ee;
+  --amber: #d97706;
+  --shadow-sm: 0 1px 2px rgba(16, 32, 56, 0.04), 0 1px 3px rgba(16, 32, 56, 0.06);
+  --shadow-md: 0 6px 24px rgba(16, 32, 56, 0.07), 0 2px 6px rgba(16, 32, 56, 0.04);
+  --shadow-lg: 0 18px 48px rgba(16, 32, 56, 0.1);
+  --radius: 16px;
+  /* 内容整体右移：左侧多留一点，右侧贴边，视觉重心偏右 */
+  --rail-left: clamp(0px, 2.6vw, 46px);
+  --radius-sm: 10px;
+  --gold: linear-gradient(135deg, #ffd970 0%, #f5a623 100%);
+  --silver: linear-gradient(135deg, #e8eef7 0%, #b9c7d9 100%);
+  --bronze: linear-gradient(135deg, #f6c8a4 0%, #d98555 100%);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  background-image: var(--bg-deco);
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+::selection {
+  background: #cfe1ff;
+}
+
+/* 细滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cdd8e6 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cdd8e6;
+  border-radius: 999px;
+}
+
+/* 通用动画 */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -320px 0;
+  }
+  100% {
+    background-position: 320px 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eef2f8 25%, #f7f9fc 37%, #eef2f8 63%);
+  background-size: 640px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}

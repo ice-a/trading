@@ -1,0 +1,43 @@
+name: hourly-crawl
+
+# 通用兜底调度：不依赖平台自带 cron，Vercel / Cloudflare / 任意主机都能用。
+# 在仓库 Settings → Secrets 里配置：
+#   SITE_URL    例如 https://your-app.vercel.app
+#   CRON_TOKEN  与部署环境里的 CRON_TOKEN / CRON_SECRET 保持一致
+#
+# 想改频率就改下面的 cron 表达式：`0 * * * *` = 每小时整点。
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: hourly-crawl
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger /api/crawl
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "→ POST ${SITE_URL}/api/crawl"
+          response=$(curl -sS --max-time 300 -w '\n%{http_code}' \
+            -X POST "${SITE_URL}/api/crawl" \
+            -H "x-cron-token: ${CRON_TOKEN}" \
+            -H "Accept: application/json")
+          code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP ${code}"
+          echo "$body"
+          # 抓取成功(200)或上一轮还没结束(429)都算正常
+          if [ "$code" != "200" ] && [ "$code" != "429" ]; then
+            echo "::error::cron 触发失败 HTTP ${code}"
+            exit 1
+          fi

@@ -1,0 +1,32 @@
+{
+  "name": "github-trending-daily",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "build:vercel": "nuxt build --preset vercel",
+    "build:cloudflare": "nuxt build --preset cloudflare-module",
+    "build:cloudflare-pages": "nuxt build --preset cloudflare-pages",
+    "build:node": "nuxt build --preset node-server",
+    "preview": "nuxt preview",
+    "start": "node .output/server/index.mjs",
+    "postinstall": "nuxt prepare",
+    "deploy:cf": "wrangler deploy",
+    "crawl": "node -e \"fetch(process.env.API_BASE||'http://localhost:3000/api/crawl',{method:'POST'}).then(r=>r.json()).then(d=>console.log(JSON.stringify(d,null,2)))\""
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "markdown-it": "^15.0.3",
+    "mongodb": "^6.12.0",
+    "nuxt": "^4.0.0",
+    "socks": "^2.8.10",
+    "undici": "^8.12.3",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.100.0"
+  }
+}
