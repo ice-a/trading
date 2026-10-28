@@ -313,7 +313,7 @@ Atlas 控制台 → **Network Access** → 添加 IP：
 `vercel.json` 已内置 Cron：
 
 ```json
-"crons": [{ "path": "/api/crawl", "schedule": "0 * * * *" }]
+"crons": [{ "path": "/api/crawl", "schedule": "0 0 * * *" }]
 ```
 
 > **Vercel Hobby（免费）计划的 Cron 每天只能跑一次**。要每小时抓取，二选一：
