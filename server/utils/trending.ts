@@ -136,6 +136,78 @@ export function parseTrendingHtml(html: string): ParsedRepo[] {
 }
 
 /** 带重试与超时的抓取 */
+/**
+ * GitHub Search API 兜底。
+ *
+ * GitHub 官方**没有** Trending API（`GET /trending` 是 404），Trending 页面上那个
+ * 「N stars today」是它自家算法算的，Search API 拿不到。
+ * 所以正常路径永远是解析 Trending 页面；只有页面抓取失败（结构变更 / 被限流 / 超时）时，
+ * 才用 Search API 拿「最近 N 天创建 + star 最多」的仓库顶上，保证榜单不至于空白。
+ *
+ * 注意：兜底数据没有「今日新增」，todayStars 会是 0，页面上显示为 0 而不是真实增量。
+ */
+interface SearchRepo {
+  full_name: string
+  name: string
+  owner: { login: string }
+  html_url: string
+  description: string | null
+  language: string | null
+  stargazers_count: number
+  forks_count: number
+}
+
+async function fetchViaSearchApi(opts: FetchOptions = {}): Promise<ParsedRepo[]> {
+  const since = opts.since ?? 'daily'
+  // 无 Trending 页面时，用「最近创建」近似：日榜 7 天、周榜 14 天、月榜 45 天
+  const days = since === 'weekly' ? 14 : since === 'monthly' ? 45 : 7
+  const from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
+
+  const lang = (opts.language || '').trim()
+  const q = `created:>${from}${lang ? ` language:${lang}` : ''}`
+  const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=25`
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'liaowangtai/1.0'
+  }
+  const token = process.env.GITHUB_TOKEN
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await httpFetch(url, {
+    headers,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000)
+  })
+
+  if (!res.ok) {
+    throw new Error(`GitHub Search API 返回 HTTP ${res.status}`)
+  }
+
+  const json = (await res.json()) as { items?: SearchRepo[] }
+  const items = json.items ?? []
+
+  return items.map((r, i) => {
+    const owner = r.owner?.login || r.full_name.split('/')[0] || ''
+    const name = r.name || r.full_name.split('/')[1] || ''
+    return {
+      owner,
+      name,
+      repoKey: `${owner}/${name}`.toLowerCase(),
+      fullName: `${owner}/${name}`,
+      url: r.html_url,
+      description: r.description || '',
+      language: r.language || '',
+      languageColor: '',
+      totalStars: r.stargazers_count ?? 0,
+      forks: r.forks_count ?? 0,
+      // Search API 没有「今日新增」，兜底时置 0
+      todayStars: 0,
+      rank: i + 1
+    }
+  })
+}
+
 export async function fetchTrendingRepos(opts: FetchOptions = {}): Promise<ParsedRepo[]> {
   const url = buildTrendingUrl(opts)
   const timeoutMs = opts.timeoutMs ?? 20_000
@@ -169,6 +241,20 @@ export async function fetchTrendingRepos(opts: FetchOptions = {}): Promise<Parse
         await new Promise((r) => setTimeout(r, 800 * (attempt + 1)))
       }
     }
+  }
+
+  // 页面路径彻底失败 → 走 Search API 兜底（官方接口，稳定但指标不同）
+  try {
+    const fallback = await fetchViaSearchApi(opts)
+    if (fallback.length) {
+      console.warn(
+        `[trending] 页面抓取失败，已用 Search API 兜底（${fallback.length} 条，今日新增不可用）：` +
+          (lastErr instanceof Error ? lastErr.message : String(lastErr))
+      )
+      return fallback
+    }
+  } catch (fallbackErr) {
+    console.error('[trending] Search API 兜底也失败：', fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr))
   }
 
   throw new Error(
