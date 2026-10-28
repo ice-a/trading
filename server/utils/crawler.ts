@@ -118,14 +118,15 @@ export async function runCrawl(trigger: CrawlRunDoc['trigger'] = 'schedule'): Pr
     let totalModified = 0
     let totalDropped = 0
 
-    for (const period of periods) {
-      const repos = await fetchTrendingRepos({
-        since: period,
-        language: cfg.trendingLanguage
+    // 三个周期并行抓：串行要 8~9s，并行约 3s，避免撞上 Serverless 函数超时
+    const results = await Promise.all(
+      periods.map(async (period) => {
+        const repos = await fetchTrendingRepos({ since: period, language: cfg.trendingLanguage })
+        return saveDailySnapshot({ repos, topN: cfg.topN, period })
       })
+    )
 
-      const one = await saveDailySnapshot({ repos, topN: cfg.topN, period })
-
+    for (const one of results) {
       saved = one
       totalFetched += one.fetched
       totalUpserted += one.upserted

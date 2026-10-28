@@ -89,12 +89,70 @@ watch(period, (p) => {
   window.history.replaceState(history.state, '', url)
 })
 
+/**
+ * 按需刷新：不再依赖任何服务端定时任务。
+ *
+ *   · 打开页面 → 调一次 /api/refresh（服务端有 1 小时节流，到点才会真的抓）
+ *   · 页面停留 → 每 1 小时自动调一次
+ *   · 点「刷新」按钮 → /api/refresh?force=1 立即抓
+ *
+ * 抓取是「先返回、再慢慢抓」不现实（Serverless 会在请求结束后杀进程），
+ * 所以这里串行：先抓 GitHub 榜单（快），再依次抓 feeds 的 3 个分片（每片 6 个端点）。
+ */
+const refreshing = ref(false)
+
+async function pullRefresh(force = false) {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    // 1) GitHub 日/周/月榜
+    const r = await $fetch<{ crawled?: boolean }>(apiUrl('/api/refresh'), {
+      method: 'POST',
+      query: force ? { force: 1 } : {},
+      timeout: 25000
+    }).catch(() => null)
+
+    // 2) 需要抓 feeds 时，分片串行跑完（每片 6 个端点，避免单次函数超时）
+    if (r?.crawled) {
+      for (let shard = 0; shard < 4; shard++) {
+        const res = await $fetch<{ nextShard?: number }>(apiUrl('/api/refresh'), {
+          method: 'POST',
+          query: { target: 'feeds', shard, force: 1 },
+          timeout: 25000
+        }).catch(() => null)
+        if (!res || res.nextShard === -1) break
+      }
+    }
+
+    if (r?.crawled) {
+      clearDataCache('trending-bundle')
+      await refresh()
+    }
+  } finally {
+    refreshing.value = false
+  }
+}
+
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(async () => {
   try {
     const status = await $fetch<{ scheduler: { intervalMinutes: number } }>(apiUrl('/api/status'))
     intervalMinutes.value = status?.scheduler?.intervalMinutes ?? 60
   } catch {
     /* 忽略 */
+  }
+
+  // 打开页面即检查一次（服务端有 1 小时节流，不到点不会真的抓）
+  void pullRefresh(false)
+  // 停留期间每小时自动检查一次
+  refreshTimer = setInterval(() => void pullRefresh(false), 3600_000)
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 })
 
@@ -113,8 +171,8 @@ function changePage(p: number) {
 }
 
 async function manualRefresh() {
-  clearDataCache('trending:')
-  await refresh()
+  // 点刷新 = 强制立刻抓（不受 1 小时节流限制）
+  await pullRefresh(true)
 }
 
 useHead({

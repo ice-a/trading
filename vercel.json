@@ -3,11 +3,4 @@
   "framework": "nuxtjs",
   "regions": ["sin1"],
   "buildCommand": "npm run build",
-  "installCommand": "npm install",
-  "crons": [
-    {
-      "path": "/api/crawl",
-      "schedule": "0 0 * * *"
-    }
-  ]
-}
+  "installCommand": "npm install"}

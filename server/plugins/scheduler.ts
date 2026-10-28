@@ -35,7 +35,7 @@ export default defineNitroPlugin((nitroApp) => {
   const useInterval = shouldRunInternalScheduler()
 
   console.log(
-    `[scheduler] 运行时=${kind} · 无状态=${serverless} · 内置定时器=${useInterval ? '开' : '关'} · 间隔=${cfg.updateIntervalMinutes} 分钟 · 库=${cfg.mongoDb} · 聚合接口=${cfg.feedsEnabled ? '开' : '关'}`
+    `[scheduler] 运行时=${kind} · 无状态=${serverless} · 内置定时器=关（按需触发） · 间隔=${cfg.updateIntervalMinutes} 分钟 · 库=${cfg.mongoDb} · 聚合接口=${cfg.feedsEnabled ? '开' : '关'}`
   )
 
   /** 一次完整刷新：GitHub + 聚合接口，互不阻塞 */
@@ -181,16 +181,20 @@ export default defineNitroPlugin((nitroApp) => {
       /* 读不到就正常抓 */
     }
 
-    await refreshAll('boot')
+    // 启动不再自动抓取：数据由前端调 /api/refresh 按需触发。
+    // 这里只做缓存预热，让首屏直接命中内存/磁盘缓存。
+    // （原来是 await refreshAll('boot')，Serverless 每次冷启动都跑一遍太浪费）
+    await warmupCache()
   }
 
   setTimeout(() => void bootstrap(), 300)
 
-  const timer = setInterval(() => {
-    void refreshAll('schedule').finally(() => {
-      state.nextRunAt = Date.now() + intervalMs
-    })
-  }, intervalMs)
+  // 定时抓取已关闭：改为按需触发（/api/refresh），
+        // 由前端在「打开页面 / 点刷新 / 每小时轮询」时调用。
+        // 这里保留一个空定时器，只为让下方 close 钩子里的 clearInterval 不报错。
+        const timer = setInterval(() => {}, intervalMs)
+        if (typeof timer.unref === "function") timer.unref()
+        console.log('[scheduler] 定时抓取已关闭，改为按需触发 /api/refresh')
   if (typeof timer.unref === 'function') timer.unref()
 
   nitroApp.hooks.hook('close', () => {

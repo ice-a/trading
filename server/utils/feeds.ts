@@ -430,11 +430,14 @@ export function isCollecting(): boolean {
 }
 
 /** 抓取全部端点并 upsert 到 MongoDB（失败不清空旧数据） */
-export async function collectFeeds(): Promise<CollectResult> {
+export async function collectFeeds(opts: { only?: string[] } = {}): Promise<CollectResult> {
   if (collecting) {
     return { total: 0, ok: 0, failed: 0, durationMs: 0, failures: [], at: new Date().toISOString() }
   }
   collecting = true
+
+  // only：只抓指定 key（用于按需刷新的分片抓取，避免 Serverless 函数超时）
+  const specs = opts.only?.length ? FEEDS.filter((f) => opts.only!.includes(f.key)) : FEEDS
 
   const started = Date.now()
   const base = appConfig().feedsBase
@@ -444,8 +447,8 @@ export async function collectFeeds(): Promise<CollectResult> {
   const results: Array<{ spec: FeedSpec; json: any | null; error: string | null; size: number }> = []
 
   try {
-    for (let i = 0; i < FEEDS.length; i += CONCURRENCY) {
-      const batch = FEEDS.slice(i, i + CONCURRENCY)
+    for (let i = 0; i < specs.length; i += CONCURRENCY) {
+      const batch = specs.slice(i, i + CONCURRENCY)
       results.push(...(await Promise.all(batch.map((spec) => fetchOne(spec, base)))))
     }
 
@@ -514,11 +517,13 @@ export async function collectFeeds(): Promise<CollectResult> {
     if (okOps.length) await col.bulkWrite(okOps, { ordered: false })
     if (failOps.length) await col.bulkWrite(failOps, { ordered: false })
 
-    // 配置里删掉的端点，库里的历史文档也要清掉，否则页面上会继续出现
-    const validKeys = FEEDS.map((f) => f.key)
-    const removed = await col.deleteMany({ key: { $nin: validKeys } })
-    if (removed.deletedCount > 0) {
-      console.log(`[feeds] 清理已下线的端点数据 ${removed.deletedCount} 条`)
+    // 全量抓取时才清理已下线端点；分片抓取（按需刷新）只抓了一部分，不能当孤儿删掉
+    if (!opts.only?.length) {
+      const validKeys = FEEDS.map((f) => f.key)
+      const removed = await col.deleteMany({ key: { $nin: validKeys } })
+      if (removed.deletedCount > 0) {
+        console.log(`[feeds] 清理已下线的端点数据 ${removed.deletedCount} 条`)
+      }
     }
 
     // 新数据已入库，立刻让接口缓存失效（下次请求读新数据并重新缓存）
