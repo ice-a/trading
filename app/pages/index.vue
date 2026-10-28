@@ -19,26 +19,38 @@ const periodRaw = typeof route.query.period === 'string' ? route.query.period : 
 const period = ref<Period>(['daily', 'weekly', 'monthly'].includes(periodRaw) ? (periodRaw as Period) : 'daily')
 const PERIOD_LABEL: Record<Period, string> = { daily: '日榜', weekly: '周榜', monthly: '月榜' }
 
-const queryKey = computed(() => `trending:${dateParam.value || 'today'}:${period.value}:${page.value}`)
-
 /**
- * 只在 SSR 阶段 await。
+ * 一次把三个周期都取回来（/api/trending-bundle）。
  *
- * 页面里无条件 top-level await 会让组件变成 async 组件并被 Suspense 包裹；
- * 多个 async 页面互相切换时，Vue 的 Suspense 会保留旧组件不销毁，
- * 表现为「URL 变了、新页面也渲染了，但旧页面还盖在上面」。
- * 客户端改成响应式更新，既躲开这个问题，也少一次等待。
+ * 原来按周期单独请求，切一次日/周/月就要发一次 SSR 请求 + 查一次库，
+ * 部署在 Serverless 上再叠冷启动，切换就很卡。现在切换纯前端，零等待。
  */
-const trendingData = useCachedData(
-  () => queryKey.value,
+interface BundleResponse {
+  date: string
+  daily: TrendingResponse
+  weekly: TrendingResponse
+  monthly: TrendingResponse
+}
+
+const bundleKey = computed(() => `trending-bundle:${dateParam.value || 'today'}:${page.value}`)
+
+const bundleData = useCachedData<BundleResponse>(
+  () => bundleKey.value,
   () =>
-    $fetch<TrendingResponse>(apiUrl('/api/trending'), {
-      query: { date: dateParam.value || undefined, page: page.value, period: period.value }
+    $fetch<BundleResponse>(apiUrl('/api/trending-bundle'), {
+      query: { date: dateParam.value || undefined, pageSize: 10 }
     }),
   { ttl: 300_000 }
 )
-if (import.meta.server) await trendingData
-const { data, pending, error, refresh } = trendingData
+if (import.meta.server) await bundleData
+const { pending, error, refresh } = bundleData
+
+/** 当前周期的数据：直接从 bundle 里切，不发任何请求 */
+const data = computed<TrendingResponse | null>(() => {
+  const b = bundleData.data.value
+  if (!b) return null
+  return (b[period.value] ?? b.daily ?? null) as TrendingResponse | null
+})
 
 const hitokotoData = useCachedData(
   () => 'hitokoto:first',
@@ -56,12 +68,25 @@ function changePeriod(p: Period) {
   page.value = 1
 }
 
-watch([dateParam, page, period], () => {
+/**
+ * 只有「日期 / 页码」变化才需要重新取数（换一天、翻页）。
+ * 周期切换纯前端切片，URL 用 replaceState 同步即可 —— 走 router.replace 会触发
+ * 一次客户端导航，在 Vercel 上还可能重新 SSR，这正是之前「切换很卡」的原因。
+ */
+watch([dateParam, page], () => {
   const query: Record<string, string> = {}
   if (dateParam.value) query.date = dateParam.value
   if (page.value > 1) query.page = String(page.value)
   if (period.value !== 'daily') query.period = period.value
   router.replace({ query })
+})
+
+watch(period, (p) => {
+  if (!import.meta.client) return
+  const url = new URL(window.location.href)
+  if (p === 'daily') url.searchParams.delete('period')
+  else url.searchParams.set('period', p)
+  window.history.replaceState(history.state, '', url)
 })
 
 onMounted(async () => {
