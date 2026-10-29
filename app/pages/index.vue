@@ -219,10 +219,46 @@ useHead({
             <span class="date">{{ heroDate || '加载中' }}</span>
             <span class="title">GitHub 日榜简报</span>
           </h1>
-          <p class="subtitle">
-            GitHub Trending Daily · Top {{ data?.topN ?? 10 }}
-            <span v-if="!isToday" class="history-tag">历史数据</span>
-          </p>
+
+          <div class="meta-row">
+            <p class="subtitle">
+              GitHub Trending Daily · Top {{ data?.topN ?? 10 }}
+              <span v-if="!isToday" class="history-tag">历史数据</span>
+            </p>
+
+            <a
+              class="author-chip"
+              href="https://github.com/ice-a"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="GitHub @ice-a"
+            >
+              <img
+                class="chip-avatar"
+                src="https://github.com/ice-a.png?size=32"
+                alt="ice-a"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+              />
+              @ice-a
+            </a>
+
+            <a
+              class="repo-chip"
+              href="https://github.com/ice-a/trading"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="项目源码 ice-a/trading"
+            >
+              <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+                />
+              </svg>
+              源码
+            </a>
+          </div>
         </div>
       </div>
 
@@ -398,6 +434,58 @@ h1 {
   font-weight: 750;
   color: #101828;
   letter-spacing: -0.3px;
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.meta-row .subtitle {
+  margin: 0;
+}
+
+.author-chip,
+.repo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px 0 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #6b7a90;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.repo-chip {
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+  font-size: 10.5px;
+}
+
+.author-chip:hover,
+.repo-chip:hover {
+  border-color: #cfe0fb;
+  background: #f7fbff;
+  color: var(--brand);
+}
+
+.chip-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #f1f5fa;
 }
 
 .subtitle {
