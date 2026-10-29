@@ -37,6 +37,88 @@ const currentUser = ref(typeof route.query.u === 'string' && route.query.u ? rou
 const keyword = ref('')
 const sortBy = ref<'pushed' | 'stars' | 'name'>('pushed')
 
+/* ============================================================
+ * GitHub 全站搜索
+ *   有搜索词 → 展示 /api/github-search 的结果
+ *   无搜索词 → 展示当前用户的仓库
+ * ========================================================== */
+interface SearchResult {
+  ok: boolean
+  error: string | null
+  keyword: string
+  total: number
+  items: Repo[]
+}
+
+const searchInput = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const searchQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const searchResult = ref<SearchResult | null>(null)
+const searching = ref(false)
+
+/** 当前是否处于「全站搜索」模式 */
+const isSearchMode = computed(() => Boolean(searchQuery.value))
+
+function syncSearchQuery(kw: string) {
+  if (!import.meta.client) return
+  const url = new URL(window.location.href)
+  if (kw) url.searchParams.set('q', kw)
+  else url.searchParams.delete('q')
+  window.history.replaceState(history.state, '', url)
+}
+
+async function doSearch() {
+  const kw = searchInput.value.trim()
+  searchQuery.value = kw
+
+  if (!kw) {
+    searchResult.value = null
+    syncSearchQuery('')
+    return
+  }
+
+  syncSearchQuery(kw)
+
+  // 同一个词已经搜过就直接复用
+  if (searchResult.value?.keyword === kw && searchResult.value.ok) return
+
+  searching.value = true
+  try {
+    searchResult.value = await $fetch<SearchResult>(apiUrl('/api/github-search'), {
+      query: { q: kw }
+    })
+  } catch (e) {
+    searchResult.value = {
+      ok: false,
+      error: e instanceof Error ? e.message : '搜索失败',
+      keyword: kw,
+      total: 0,
+      items: []
+    }
+  } finally {
+    searching.value = false
+  }
+}
+
+function clearSearch() {
+  searchInput.value = ''
+  searchQuery.value = ''
+  searchResult.value = null
+  syncSearchQuery('')
+}
+
+/** 搜索结果里的仓库（服务端已按相关度/star 排好，不再本地二次过滤） */
+const searchRepos = computed<Repo[]>(() => searchResult.value?.items ?? [])
+
+/** 模板统一用这三个：搜索模式走搜索数据，否则走当前用户仓库 */
+const displayRepos = computed<Repo[]>(() => (isSearchMode.value ? searchRepos.value : filteredRepos.value))
+const displayLoading = computed(() => (isSearchMode.value ? searching.value : reposPending.value))
+const displayError = computed(() => (isSearchMode.value ? searchResult.value?.error : repos.value?.error))
+
+onMounted(() => {
+  // 带 ?q= 进来时自动搜一次
+  if (searchQuery.value) void doSearch()
+})
+
 
 const reposData = useCachedData(
   () => `repos:${currentUser.value}:${sortBy.value}`,
@@ -123,8 +205,14 @@ useHead({ title: 'GitHub · 瞭望台' })
     <section class="block">
       <div class="repo-head">
         <h2 class="block-title">
-          GitHub 仓库
-          <span class="sub">{{ currentUser }} · 最近推送优先</span>
+          {{ isSearchMode ? '搜索结果' : 'GitHub 仓库' }}
+          <span class="sub">
+            {{
+              isSearchMode
+                ? `关键词「${searchQuery}」· 共 ${searchResult?.total ?? 0} 个`
+                : `${currentUser} · 最近推送优先`
+            }}
+          </span>
         </h2>
 
         <div class="repo-tools">
@@ -144,24 +232,34 @@ useHead({ title: 'GitHub · 瞭望台' })
             d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"
           />
         </svg>
-        <input v-model="keyword" type="search" placeholder="搜索仓库名 / 描述 / 语言 / 标签…" spellcheck="false" />
-        <span class="count">{{ filteredRepos.length }} 个</span>
+        <input
+          v-model="searchInput"
+          type="search"
+          placeholder="搜索 GitHub 全站仓库，回车执行（如 react / vue / rust cli）"
+          spellcheck="false"
+          @keyup.enter="doSearch"
+        />
+        <span class="count">{{ isSearchMode ? `${searchResult?.total ?? 0} 个结果` : `${filteredRepos.length} 个` }}</span>
+        <button v-if="isSearchMode" class="search-act ghost" @click="clearSearch">返回</button>
+        <button v-else class="search-act" :disabled="searching" @click="doSearch">
+          {{ searching ? '搜索中…' : '搜索' }}
+        </button>
       </div>
 
-      <div v-if="repos?.error" class="alert">
-        {{ repos.error }}
+      <div v-if="displayError" class="alert">
+        {{ displayError }}
       </div>
 
-      <div v-else-if="reposPending && !(repos?.items?.length)" class="repo-grid">
+      <div v-else-if="displayLoading && !displayRepos.length" class="repo-grid">
         <div v-for="i in 9" :key="`sk-${i}`" class="repo-card sk">
           <div class="skeleton" style="width: 45%; height: 13px" />
           <div class="skeleton" style="width: 85%; height: 10px; margin-top: 10px" />
         </div>
       </div>
 
-      <div v-else-if="filteredRepos.length" class="repo-grid">
+      <div v-else-if="displayRepos.length" class="repo-grid">
         <a
-          v-for="r in filteredRepos"
+          v-for="r in displayRepos"
           :key="r.fullName"
           class="repo-card"
           :href="r.url"
@@ -196,8 +294,8 @@ useHead({ title: 'GitHub · 瞭望台' })
       </div>
 
       <div v-else class="empty">
-        <p>没有匹配的仓库</p>
-        <p class="empty-sub">换个关键词，或点上面的其他用户</p>
+        <p>{{ isSearchMode ? '没有搜到相关仓库' : '没有匹配的仓库' }}</p>
+        <p class="empty-sub">{{ isSearchMode ? '换个关键词试试，或点「返回」看当前用户的仓库' : '换个关键词，或点上面的其他用户' }}</p>
       </div>
     </section>
   </div>
@@ -425,6 +523,41 @@ useHead({ title: 'GitHub · 瞭望台' })
   font-size: 13px;
   color: #22314a;
   background: transparent;
+}
+
+.search-act {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.search-act:hover:not(:disabled) {
+  background: #1a5fd0;
+}
+
+.search-act:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.search-act.ghost {
+  border-color: var(--line-strong);
+  background: #fff;
+  color: #3d4c60;
+}
+
+.search-act.ghost:hover {
+  border-color: #b9cdee;
+  color: var(--brand);
+  background: #f7fbff;
 }
 
 .count {
