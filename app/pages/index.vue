@@ -145,6 +145,8 @@ onMounted(async () => {
 
   // 打开页面即检查一次（服务端有 1 小时节流，不到点不会真的抓）
   void pullRefresh(false)
+  // 30 秒心跳：让「更新于 x 分钟前」自己往前走
+  setInterval(() => (clientNow.value = Date.now()), 30_000)
   // 停留期间每小时自动检查一次
   refreshTimer = setInterval(() => void pullRefresh(false), 3600_000)
 })
@@ -159,6 +161,25 @@ onBeforeUnmount(() => {
 const items = computed(() => data.value?.items ?? [])
 const isToday = computed(() => data.value?.isToday ?? true)
 const heroDate = computed(() => data.value?.date ?? '')
+
+/**
+ * 「更新于 x 分钟前」不能直接用服务端算好的字符串：
+ * SSR 只算一次，页面不刷新就永远停在那一刻。
+ * 这里在客户端每 30 秒重算一次，时间会自己往前走。
+ */
+const clientNow = ref(Date.now())
+
+const updatedAgoText = computed(() => {
+  const t = data.value?.updatedAt
+  if (!t) return data.value?.updatedAgo ?? '—'
+  const diff = Math.max(0, clientNow.value - new Date(t).getTime())
+  const min = Math.floor(diff / 60000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min} 分钟前`
+  const hour = Math.floor(min / 60)
+  if (hour < 24) return `${hour} 小时前`
+  return `${Math.floor(hour / 24)} 天前`
+})
 
 function backToToday() {
   dateParam.value = ''
@@ -267,7 +288,7 @@ useHead({
           每 {{ intervalMinutes }} 分钟自动更新
         </span>
         <span class="sep" />
-        <span class="stat">更新于 {{ data?.updatedAgo ?? '—' }}</span>
+        <span class="stat">更新于 {{ updatedAgoText }}</span>
         <span class="sep" />
         <span class="stat">已追踪 {{ data?.stats.tracked ?? 0 }} 个仓库</span>
         <span v-if="(data?.stats.droppedCount ?? 0) > 0" class="stat muted">

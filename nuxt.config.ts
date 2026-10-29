@@ -113,14 +113,10 @@ export default defineNuxtConfig({
     // 数据每小时才变一次，边缘/函数层缓存 60 秒可以大幅减少 Mongo 查询，
     // 同时让 Serverless 冷启动后的首屏更快。
     routeRules: {
-      // 页面级缓存：数据每小时才变，让 CDN 直接吐静态页面，用户请求不触发函数
-      '/': { swr: 300 },
-      '/v2': { swr: 300 },
-      '/nav': { swr: 600 },
-      '/ai': { swr: 600 },
-      '/dns': { swr: 120 },
-      '/share': { swr: 60 },
-      '/history': { swr: 300 },
+      // 注意：这里**不要**给页面加 swr/isr。
+      // 页面级缓存会把整页 HTML 一起缓存，导致「日期」「更新于 x 分钟前」停留在缓存时刻，
+      // 出现「API 已经是今天的数据、页面还显示昨天」的问题。
+      // 真正的加速靠两层：接口层的 withCache + 磁盘缓存（20~80ms），页面 SSR 本身很快。
       '/api/trending': { swr: 60 },
       '/api/days': { swr: 300 },
       '/api/hitokoto': { swr: 0 },
