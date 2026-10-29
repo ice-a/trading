@@ -50,6 +50,27 @@ interface SearchResult {
   items: Repo[]
 }
 
+/* ---------- 用户自己的 GitHub Token（存 localStorage，只在搜索时用） ---------- */
+const TOKEN_KEY = 'liaowangtai:gh-token'
+const ghToken = ref('')
+
+function loadToken() {
+  if (!import.meta.client) return
+  ghToken.value = localStorage.getItem(TOKEN_KEY) || ''
+}
+
+function saveToken() {
+  if (!import.meta.client) return
+  const v = ghToken.value.trim()
+  if (v) localStorage.setItem(TOKEN_KEY, v)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+function clearToken() {
+  ghToken.value = ''
+  saveToken()
+}
+
 const searchInput = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const searchQuery = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const searchResult = ref<SearchResult | null>(null)
@@ -83,8 +104,12 @@ async function doSearch() {
 
   searching.value = true
   try {
+    const headers: Record<string, string> = {}
+    if (ghToken.value.trim()) headers['x-github-token'] = ghToken.value.trim()
+
     searchResult.value = await $fetch<SearchResult>(apiUrl('/api/github-search'), {
-      query: { q: kw }
+      query: { q: kw },
+      headers
     })
   } catch (e) {
     searchResult.value = {
@@ -115,6 +140,7 @@ const displayLoading = computed(() => (isSearchMode.value ? searching.value : re
 const displayError = computed(() => (isSearchMode.value ? searchResult.value?.error : repos.value?.error))
 
 onMounted(() => {
+  loadToken()
   // 带 ?q= 进来时自动搜一次
   if (searchQuery.value) void doSearch()
 })
@@ -246,11 +272,34 @@ useHead({ title: 'GitHub · 瞭望台' })
         </button>
       </div>
 
+      <div class="token-row">
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path fill="currentColor" d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z" />
+        </svg>
+        <input
+          v-model="ghToken"
+          type="password"
+          class="token-input"
+          placeholder="可选：填入你自己的 GitHub Token（配额从 10 次/分钟提升到 30 次/分钟）"
+          spellcheck="false"
+          autocomplete="off"
+          @change="saveToken"
+        />
+        <span v-if="ghToken" class="token-state on">已启用</span>
+        <span v-else class="token-state">未填 · 共用公共配额</span>
+        <button v-if="ghToken" class="token-clear" @click="clearToken">清除</button>
+      </div>
+
       <div v-if="displayError" class="alert">
         {{ displayError }}
       </div>
 
-      <div v-else-if="displayLoading && !displayRepos.length" class="repo-grid">
+      <div v-else-if="displayLoading && !displayRepos.length" class="search-wait">
+        <span class="spin" />
+        {{ ghToken ? '正在搜索…' : '正在搜索，公共配额紧张时会排队等待…' }}
+      </div>
+
+      <div v-else-if="false" class="repo-grid">
         <div v-for="i in 9" :key="`sk-${i}`" class="repo-card sk">
           <div class="skeleton" style="width: 45%; height: 13px" />
           <div class="skeleton" style="width: 85%; height: 10px; margin-top: 10px" />
@@ -558,6 +607,91 @@ useHead({ title: 'GitHub · 瞭望台' })
   border-color: #b9cdee;
   color: var(--brand);
   background: #f7fbff;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -4px 0 12px;
+  padding: 0 2px;
+  color: #a4b0bf;
+  flex-wrap: wrap;
+}
+
+.token-input {
+  flex: 1;
+  min-width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--line-strong);
+  background: #fbfcfe;
+  font-size: 11.5px;
+  color: #3d4c60;
+  outline: 0;
+}
+
+.token-input:focus {
+  border-style: solid;
+  border-color: var(--brand);
+  background: #fff;
+}
+
+.token-state {
+  flex: none;
+  font-size: 11px;
+  color: #b0bccb;
+}
+
+.token-state.on {
+  color: #0f8a44;
+  font-weight: 600;
+}
+
+.token-clear {
+  flex: none;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: #7b8999;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.token-clear:hover {
+  border-color: #ffd9d9;
+  color: #b42318;
+}
+
+.search-wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 48px 20px;
+  color: #7b8999;
+  font-size: 13px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e3edfb;
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .count {
