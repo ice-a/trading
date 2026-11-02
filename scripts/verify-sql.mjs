@@ -41,6 +41,28 @@ const indexes = db
   .map((r) => r.name)
 check('索引', indexes.length >= 3, `${indexes.length} 个：${indexes.join(', ')}`)
 
+/* ---------- 1.5 内联 DDL 与 schema.sql 一致性 ----------
+ * server/utils/schema.ts 里的 SCHEMA_DDL 是构建进产物的一份副本，
+ * 它和 db/schema.sql 必须描述同一套表。这里用「建表后的表名集合」比对。
+ */
+console.log('\n①.5 内联 DDL 一致性 …')
+{
+  const { SCHEMA_DDL } = await import('../server/utils/schema.ts').catch(() => ({ SCHEMA_DDL: null }))
+  if (!SCHEMA_DDL) {
+    console.log('  (跳过：Node 无法直接 import .ts，由下面的表名断言兜底)')
+  } else {
+    const fs2 = new DatabaseSync(':memory:')
+    for (const ddl of SCHEMA_DDL) fs2.exec(ddl)
+    const inlineTables = fs2
+      .prepare("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")
+      .all()
+      .map((r) => r.name)
+    const same = inlineTables.join(',') === tables.join(',')
+    check('schema.ts 与 schema.sql 表一致', same, inlineTables.join(', '))
+    fs2.close()
+  }
+}
+
 /* ---------- 2. seed ---------- */
 console.log('\n② 执行 db/seed.sql …')
 db.exec(readFileSync('db/seed.sql', 'utf8'))

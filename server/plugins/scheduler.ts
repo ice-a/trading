@@ -1,5 +1,5 @@
 import { runCrawl, crawlState } from '../utils/crawler'
-import { pingDb } from '../utils/db'
+import { pingDb, ensureSchema } from '../utils/db'
 import { invalidateCache } from '../utils/cache'
 import { appConfig } from '../utils/config'
 import { envFlag } from '../utils/env'
@@ -70,6 +70,13 @@ export default defineNitroPlugin((nitroApp) => {
   }
 
   const healthCheck = async (): Promise<boolean> => {
+    // 空库自愈：先确保表存在，再探连通性
+    try {
+      await ensureSchema()
+    } catch (err) {
+      console.error('[db] 建表失败：', err instanceof Error ? err.message : err)
+      return false
+    }
     const ping = await pingDb()
     if (!ping.ok) {
       console.error(`[db] 自检失败（${ping.mode}）：${ping.error}`)

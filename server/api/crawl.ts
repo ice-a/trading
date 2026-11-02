@@ -21,16 +21,25 @@ export default defineEventHandler(async (event) => {
   }
 
   const cfg = appConfig()
-  const secret = cfg.cronToken
+  // 服务端配置值也可能带空白（环境变量粘贴时残留），统一 trim 后再比较
+  const secret = cfg.cronToken.trim()
   const query = getQuery(event)
 
   if (secret) {
     const auth = getHeader(event, 'authorization') || ''
-    const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : ''
-    const provided = String(getHeader(event, 'x-cron-token') || bearer || query.token || '')
-    if (provided !== secret) {
+    const bearer = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7) : ''
+    const provided = String(getHeader(event, 'x-cron-token') || bearer || query.token || '').trim()
+    if (!provided || provided !== secret) {
       setResponseStatus(event, 401)
-      return { ok: false, error: '令牌无效' }
+      // 回显长度与首尾字符的"有无空白"，便于对账，但不泄露内容
+      return {
+        ok: false,
+        error: provided
+          ? `令牌不匹配（服务端 ${secret.length} 字符，请求方 ${provided.length} 字符）`
+          : '缺少令牌：请带 ?token= 或 Authorization: Bearer',
+        expectedLen: secret.length,
+        gotLen: provided.length
+      }
     }
   }
 

@@ -15,12 +15,12 @@ import { env } from '../utils/env'
  * 或者 GitHub Actions 定时 curl。
  */
 export default defineEventHandler(async (event) => {
-  const secret = env('CRON_SECRET', '') || env('CRON_TOKEN', '')
+  const secret = (env('CRON_SECRET', '') || env('CRON_TOKEN', '')).trim()
 
   if (secret) {
     const auth = String(getHeader(event, 'authorization') || '')
     const provided = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : ''
-    if (provided !== secret) {
+    if (!provided || provided !== secret) {
       setResponseStatus(event, 401)
       return { ok: false, error: '令牌无效' }
     }

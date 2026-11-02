@@ -20,6 +20,7 @@
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { env } from './env'
+import { SCHEMA_DDL } from './schema'
 
 export interface SqlStmt {
   sql: string
@@ -54,8 +55,43 @@ let filePath = ''
 const statements = new Map<string, unknown>()
 const MAX_STATEMENTS = 256
 
+/** 建表只做一次（每个进程 / 每个 serverless 实例一次） */
+let schemaReady = false
+let schemaPromise: Promise<void> | null = null
+
 export function dbMode(): DbMode {
   return env('TURSO_DATABASE_URL', '') ? 'remote' : 'file'
+}
+
+/**
+ * 确保表存在（空库自愈）。
+ *
+ * 背景：Vercel 上没有可供运维执行 `npm run db:init` 的时机 ——
+ * 新库/新环境首次请求就会因为 `no such table` 直接 500。
+ * 全部 DDL 都是 `CREATE ... IF NOT EXISTS`，所以：
+ *   · 空库        → 一次建全，几乎无开销
+ *   · 已有表      → 全部命中 IF NOT EXISTS，纯空转（几十 ms，且只在首次执行）
+ *
+ * 并发安全：多实例同时进入时各自的 IF NOT EXISTS 都是幂等的，不会互相破坏。
+ */
+export async function ensureSchema(): Promise<void> {
+  if (schemaReady) return
+  if (schemaPromise) return schemaPromise
+
+  schemaPromise = (async () => {
+    for (const ddl of SCHEMA_DDL) {
+      await sqlRun(ddl)
+    }
+    schemaReady = true
+  })()
+
+  try {
+    await schemaPromise
+  } catch (err) {
+    // 失败则下次请求重试（比如库暂时不可用）
+    schemaPromise = null
+    throw err
+  }
 }
 
 function fileDbPath(): string {
