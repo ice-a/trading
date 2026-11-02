@@ -111,7 +111,7 @@ Project Settings → Environment Variables：
 | --- | --- | --- |
 | `TURSO_DATABASE_URL` | `libsql://xxxx.turso.io` | ✅ |
 | `TURSO_AUTH_TOKEN` | `ey...` | ✅ |
-| `CRON_SECRET` | 随机串 | ✅（cron 鉴权） |
+| `CRON_SECRET` | 随机串 | ✅（cron 鉴权；`/api/crawl` 也认 `CRON_TOKEN`，两者同名即可） |
 | `GITHUB_TOKEN` | GitHub PAT | 可选（提高配额） |
 | `CF_API_TOKEN` | Cloudflare token（Zone.DNS:Read） | 可选（/dns 直读） |
 | `CF_ZONE_IDS` | `zone1,zone2` | 可选 |
