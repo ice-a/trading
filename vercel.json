@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nuxtjs",
   "regions": ["hkg1"],
+  "git": {
+    "deploymentEnabled": {
+      "dist": false
+    }
+  },
   "crons": [
     {
       "path": "/api/cron",

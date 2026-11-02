@@ -32,6 +32,15 @@ cp .env.example "$tmp"/
 # dist 分支专用的部署说明与更新脚本
 cp deploy/dist/DEPLOY.md "$tmp/DEPLOY.md"
 cp deploy/dist/update.sh "$tmp/update.sh"
+# dist 分支只有产物、没有 package.json：必须显式禁用 Vercel 自动部署，
+# 否则 Vercel 会试着跑 nuxt build 然后 exit 127
+cat > "$tmp/vercel.json" <<'JSON'
+{
+  "git": {
+    "deploymentEnabled": false
+  }
+}
+JSON
 chmod +x "$tmp/update.sh"
 cat > "$tmp/.gitignore" <<'EOF'
 # 服务器本地状态，不进仓库
