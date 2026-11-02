@@ -17,11 +17,12 @@
     "db:reset": "node scripts/db-cli.mjs reset",
     "db:info": "node scripts/db-cli.mjs info",
     "db:shell": "node scripts/db-cli.mjs shell",
+    "turso:init": "bash scripts/init-turso.sh",
     "crawl": "node scripts/crawl-once.mjs",
     "typecheck": "nuxt prepare && tsc -p .nuxt/tsconfig.server.json --noEmit && vue-tsc -p .nuxt/tsconfig.app.json --noEmit",
     "verify:sql": "node scripts/verify-sql.mjs",
-    "postinstall": "nuxt prepare",
-    "publish-dist": "bash scripts/publish-dist.sh"
+    "publish-dist": "bash scripts/publish-dist.sh",
+    "postinstall": "nuxt prepare"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

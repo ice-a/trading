@@ -61,6 +61,7 @@ npm run dev            # http://localhost:3000
 | `npm run db:seed` | 灌示例数据（幂等） |
 | `npm run db:info` | 表行数 / 文件大小 / 连接模式 |
 | `npm run db:reset` | 删库重建（`FORCE=1` 确认，仅本地） |
+| `npm run turso:init` | 建 Turso 库 + 建表 + 打印 Vercel 环境变量 |
 | `npm run crawl` | 手动抓一次（服务需在运行） |
 | `npm run verify:sql` | 校验 schema / seed / 关键 SQL |
 | `npm run typecheck` | server(tsc) + app(vue-tsc) |
@@ -74,22 +75,28 @@ npm run dev            # http://localhost:3000
 Vercel 的函数**没有持久磁盘**，`/tmp` 不跨实例，SQLite 文件写不了 —— 所以必须用远程库。
 Turso 是 libSQL（SQLite 分支），schema 完全不用改。
 
-```bash
-curl -sSfL https://get.tur.so/install.sh | bash
+一条命令搞定建库 + 建表 + 生成 token + 打印环境变量：
 
-turso auth signup                    # 或 turso auth login
-turso db create liaowangtai
-turso db show liaowangtai --url      # 记下 libsql://...
-turso db tokens create liaowangtai   # 记下 token
+```bash
+curl -sSfL https://get.tur.so/install.sh | bash   # 装 CLI
+turso auth signup                                  # 登录
+
+npm run turso:init        # = bash scripts/init-turso.sh
 ```
 
-建表（本地执行，指向远程库）：
+它会：检查 CLI 与登录 → 建库（已存在则复用）→ 取 URL / 生成 token →
+就地执行 `db/schema.sql` + `db/seed.sql` → 写回 `.env` → 打印要填到 Vercel 的三条变量。
+
+想手动来也行：
 
 ```bash
+turso db create liaowangtai
+turso db show liaowangtai --url      # libsql://...
+turso db tokens create liaowangtai   # ey...
+
 export TURSO_DATABASE_URL="libsql://xxxx.turso.io"
 export TURSO_AUTH_TOKEN="ey..."
-npm run db:init
-npm run db:seed      # 可选
+npm run db:init && npm run db:seed
 ```
 
 ### 2. 导入仓库
@@ -131,22 +138,50 @@ curl "https://<your-app>.vercel.app/api/cron" -H "Authorization: Bearer $CRON_SE
 "crons": [{ "path": "/api/cron", "schedule": "0 3 * * *" }]
 ```
 
-想要**每小时**更新，用免费的外部定时打 `/api/crawl`：
+想要**每小时**更新，两种做法。
+
+**A. GitHub Actions（推荐）**
+
+在仓库里新建 `.github/workflows/crawl.yml`，内容：
+
+```yaml
+name: crawl
+on:
+  schedule: [{ cron: '5 * * * *' }]   # 每小时第 5 分钟（UTC）
+  workflow_dispatch:
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 触发抓取
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+        run: |
+          test -n "$APP_URL" && test -n "$CRON_TOKEN" || { echo "缺少 APP_URL / CRON_TOKEN"; exit 1; }
+          curl -fsS --max-time 120 -X POST             "$APP_URL/api/crawl?token=$CRON_TOKEN"             -H "Authorization: Bearer $CRON_TOKEN"
+```
+
+仓库配置（Settings → Secrets and variables → Actions）：
+
+| 类型 | 名称 | 值 |
+| --- | --- | --- |
+| Variables | `APP_URL` | `https://<你的 vercel 域名>` |
+| Secrets | `CRON_TOKEN` | 与 Vercel 的 `CRON_SECRET` 相同 |
+
+> 用命令行 push 这个文件需要 PAT 带 `workflow` scope；**直接在 GitHub 网页 New file 粘贴内容不需要任何 scope**。
+
+**B. 外部 cron（最省事，不碰 GitHub 权限）**
+
+cron-job.org / UptimeRobot 之类，每小时发一次：
 
 ```bash
 curl -fsS -X POST "https://<your-app>.vercel.app/api/crawl?token=$CRON_TOKEN"
-```
-
-或加一个 GitHub Actions（每小时一次，额度充足）：
-
-```yaml
-on:
-  schedule: [{ cron: "5 * * * *" }]
-jobs:
-  crawl:
-    runs-on: ubuntu-latest
-    steps:
-      - run: curl -fsS -X POST "https://<your-app>.vercel.app/api/crawl?token=${{ secrets.CRON_TOKEN }}"
 ```
 
 ---
