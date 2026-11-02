@@ -1,6 +1,6 @@
 import { runCrawl, crawlState } from '../utils/crawler'
 import { pingDb, ensureSchema } from '../utils/db'
-import { invalidateCache } from '../utils/cache'
+import { invalidateCache, pruneDbCache } from '../utils/cache'
 import { appConfig } from '../utils/config'
 import { envFlag } from '../utils/env'
 
@@ -61,8 +61,9 @@ export default defineNitroPlugin((nitroApp) => {
     } catch (err) {
       console.error('[crawl] 未捕获异常:', err)
     }
-    // 新数据已入库：清掉进程内缓存
+    // 新数据已入库：清掉缓存
     invalidateCache('')
+    void pruneDbCache()
     state.nextRunAt = Date.now() + intervalMs
     console.log(
       `[scheduler] 本轮完成 ${Date.now() - started}ms，下次 ${new Date(state.nextRunAt).toLocaleString('zh-CN')}`

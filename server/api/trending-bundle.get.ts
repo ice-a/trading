@@ -1,3 +1,4 @@
+import { withDbCache } from '../utils/cache'
 import { getDayRepos, listDays } from '../utils/store'
 import { dayKeyOf, humanDay, isValidDayKey, relativeTime } from '../utils/date'
 import type { Bucket, TrendingRepoView, TrendingPeriod } from '../utils/types'
@@ -31,7 +32,7 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
 
-  return withCache(`trending-bundle:${date}:${pageSize}`, 10 * 60_000, async () => {
+  return withDbCache(`trending-bundle:${date}:${pageSize}`, 10 * 60_000, async () => {
     const [daily, weekly, monthly, days] = await Promise.all([
       getDayRepos(date, 'daily'),
       getDayRepos(date, 'weekly'),

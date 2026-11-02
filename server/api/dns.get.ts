@@ -41,6 +41,43 @@ function envZones(): string[] {
     .filter(Boolean)
 }
 
+/**
+ * CF_ZONE_IDS 允许填两种值：
+ *   · 32 位 zone id（abcdef0123...）
+ *   · 域名（example.com）—— 自动用 /zones?name= 反查真实 id
+ *
+ * 之前只支持前者，用户按习惯填了域名，Cloudflare 直接报
+ * "Could not route to /zones/example.com/dns_records"，面板就空了。
+ */
+const ZONE_ID_RE = /^[0-9a-f]{32}$/i
+
+async function resolveZoneId(raw: string, token: string): Promise<{ id: string; name?: string; error?: string }> {
+  if (ZONE_ID_RE.test(raw)) return { id: raw }
+
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(raw)}&per_page=1`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(12_000)
+      }
+    )
+    const body = (await res.json().catch(() => null)) as
+      | { success?: boolean; errors?: Array<{ message?: string }>; result?: Array<{ id: string; name: string }> }
+      | null
+
+    if (!res.ok || !body?.success) {
+      const msg = body?.errors?.[0]?.message || `HTTP ${res.status}`
+      return { id: '', error: `解析 zone "${raw}" 失败：${msg}` }
+    }
+    const hit = body.result?.[0]
+    if (!hit) return { id: '', error: `找不到 zone "${raw}"，检查 token 是否有该域名的访问权` }
+    return { id: hit.id, name: hit.name }
+  } catch (err) {
+    return { id: '', error: `解析 zone "${raw}" 失败：${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
 /** 从 CF 拉一个 zone 的 DNS 记录 */
 async function fetchZoneRecords(zoneId: string, token: string): Promise<{ records: CfRecord[]; error?: string }> {
   try {
@@ -142,9 +179,18 @@ export default defineEventHandler(async (event) => {
   let zoneCount = 0
 
   if (token && zones.length) {
-    const results = await Promise.all(zones.map((z) => fetchZoneRecords(z, token)))
-    const allRecords: CfRecord[] = []
+    // 先解析 zone（域名 → 32 位 id），解析失败的单独收集错误
+    const resolved = await Promise.all(zones.map((z) => resolveZoneId(z, token)))
+    const validIds: string[] = []
     const errors: string[] = []
+
+    for (const r of resolved) {
+      if (r.error) errors.push(r.error)
+      else if (r.id) validIds.push(r.id)
+    }
+
+    const results = await Promise.all(validIds.map((id) => fetchZoneRecords(id, token)))
+    const allRecords: CfRecord[] = []
 
     for (const r of results) {
       if (r.error) errors.push(r.error)
@@ -153,12 +199,16 @@ export default defineEventHandler(async (event) => {
 
     if (allRecords.length) {
       source = 'cloudflare'
-      zoneCount = zones.length
+      zoneCount = validIds.length
       await persist(allRecords)
       cfError = errors.length ? errors.join('; ') : null
     } else {
       cfError = errors.length ? errors.join('; ') : 'Cloudflare 未返回记录'
     }
+  } else if (!token) {
+    cfError = '未配置 CF_API_TOKEN，只能读本地缓存'
+  } else {
+    cfError = '未配置 CF_ZONE_IDS（可填域名或 32 位 zone id）'
   }
 
   /* ---- 2. 读库（CF 成功时读的就是刚写入的；60 秒缓存，DNS 记录本身很少变） ---- */

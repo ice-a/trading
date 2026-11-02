@@ -1,3 +1,4 @@
+import { withDbCache } from '../utils/cache'
 import { env } from '../utils/env'
 
 /**
@@ -30,7 +31,8 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=300, stale-while-revalidate=600')
 
-  return withCache(`repos:${user}:${sort}`, 10 * 60_000, async () => {
+  // 落库缓存：Vercel 多实例下内存缓存命中率接近 0，必须共享
+  return withDbCache(`repos:${user}:${sort}`, 30 * 60_000, async () => {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'github-trending-daily'

@@ -53,17 +53,10 @@ const initialDate = (() => {
   return (list.find((d) => !d.isToday) ?? list[0])?.date ?? ''
 })()
 
-/** 榜单周期：日 / 周 / 月 */
-type Period = 'daily' | 'weekly' | 'monthly'
-const periodRawH = typeof route.query.period === 'string' ? route.query.period : ''
-const period = ref<Period>(['daily', 'weekly', 'monthly'].includes(periodRawH) ? (periodRawH as Period) : 'daily')
-
 const selected = ref(initialDate)
 
-/** 切换周期：保留已选日期，回到第一页；日期在新周期没有数据时回退到最近一天 */
-function changePeriod(p: Period) {
-  if (period.value === p) return
-  period.value = p
+/** 切换日期：回到第一页 */
+function changeDate(d: string) {
   page.value = 1
 }
 const page = ref(Math.max(1, Number(route.query.page) || 1))
@@ -88,7 +81,6 @@ function syncQuery() {
   const query: Record<string, string> = {}
   if (selected.value) query.date = selected.value
   if (page.value > 1) query.page = String(page.value)
-  if (period.value !== 'daily') query.period = period.value
   router.replace({ query })
 }
 
@@ -117,7 +109,6 @@ useHead({
   <div class="page">
     <!-- 顶部 -->
     <header class="hero">
-      <PeriodSwitch v-model="period" @update:model-value="changePeriod" />
       <div class="hero-left">
 <div class="titles">
           <h1>历史榜单</h1>

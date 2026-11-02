@@ -226,7 +226,7 @@ onMounted(() => {
   seed.value = q && !Number.isNaN(Number(q)) ? Number(q) : Math.floor(Math.random() * 100_000_000)
 })
 
-useHead({ title: '个性头像 · 瞭望台' })
+useHead({ title: '个性头像' })
 </script>
 
 <template>

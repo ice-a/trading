@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs'
 
 const db = new DatabaseSync(':memory:')
 
-const EXPECT_TABLES = ['app_meta', 'crawl_locks', 'crawl_runs', 'dns_records', 'trending_repos']
+const EXPECT_TABLES = ['app_meta', 'crawl_locks', 'crawl_runs', 'dns_records', 'response_cache', 'trending_repos']
 
 let failed = 0
 const check = (label, ok, detail = '') => {
@@ -39,7 +39,7 @@ const indexes = db
   .prepare("select name from sqlite_master where type='index' and name like 'idx_%'")
   .all()
   .map((r) => r.name)
-check('索引', indexes.length >= 3, `${indexes.length} 个：${indexes.join(', ')}`)
+check('索引', indexes.length >= 4, `${indexes.length} 个：${indexes.join(', ')}`)
 
 /* ---------- 1.5 内联 DDL 与 schema.sql 一致性 ----------
  * server/utils/schema.ts 里的 SCHEMA_DDL 是构建进产物的一份副本，

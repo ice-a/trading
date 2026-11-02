@@ -1,3 +1,4 @@
+import { withDbCache } from '../utils/cache'
 import { getDayRepos } from '../utils/store'
 import { dayKeyOf, isValidDayKey, humanDay, relativeTime } from '../utils/date'
 import { listDays } from '../utils/store'
@@ -36,7 +37,7 @@ export default defineEventHandler(async (event): Promise<TrendingResponse> => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
 
-  const payload = await withCache<TrendingResponse>(
+  const payload = await withDbCache<TrendingResponse>(
     `trending:${date}:${period}:${page}:${pageSize}`,
     65 * 60_000,
     async () => {

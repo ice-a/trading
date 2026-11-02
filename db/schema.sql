@@ -82,3 +82,12 @@ CREATE TABLE IF NOT EXISTS crawl_locks (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+-- 跨实例响应缓存（Vercel 上内存缓存不跨实例，必须落共享库）
+CREATE TABLE IF NOT EXISTS response_cache (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,          -- JSON
+  expires_at TEXT NOT NULL,          -- ISO 时间，到点即失效
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cache_exp ON response_cache (expires_at);

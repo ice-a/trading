@@ -1,6 +1,6 @@
 import { runCrawl } from '../utils/crawler'
 import { appConfig } from '../utils/config'
-import { invalidateCache } from '../utils/cache'
+import { invalidateCache, pruneDbCache } from '../utils/cache'
 
 /**
  * /api/crawl —— 强制抓取一次（运维 / 外部 cron / 手动）。
@@ -46,6 +46,7 @@ export default defineEventHandler(async (event) => {
   const startedAt = Date.now()
   const github = await runCrawl('manual')
   invalidateCache('')
+  void pruneDbCache()
 
   setResponseStatus(event, github.ok ? 200 : github.skipped ? 429 : 500)
 

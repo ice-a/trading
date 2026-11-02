@@ -204,7 +204,7 @@ function pushedAgo(iso: string) {
 }
 
 
-useHead({ title: 'GitHub · 瞭望台' })
+useHead({ title: 'GitHub' })
 </script>
 
 <template>

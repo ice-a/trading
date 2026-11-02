@@ -1,3 +1,4 @@
+import { withDbCache } from '../utils/cache'
 import { env } from '../utils/env'
 
 /**
@@ -64,7 +65,7 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
 
   // 结果与 token 无关，共用同一份缓存
-  return withCache(`gh-search:${keyword}:${sort}:${order}:${page}:${perPage}`, 5 * 60_000, async () => {
+  return withDbCache(`gh-search:${keyword}:${sort}:${order}:${page}:${perPage}`, 15 * 60_000, async () => {
     const url =
       'https://api.github.com/search/repositories?q=' +
       encodeURIComponent(keyword) +

@@ -70,7 +70,7 @@ function latencyClass(ms?: number) {
   return 'slow'
 }
 
-useHead({ title: 'Cloudflare DNS · 瞭望台' })
+useHead({ title: 'Cloudflare DNS' })
 </script>
 
 <template>

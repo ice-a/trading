@@ -21,11 +21,6 @@ const isActive = (to: string) => {
 <template>
   <header class="site-header">
     <div class="inner">
-      <NuxtLink to="/" class="brand">
-        <span class="brand-dot" />
-        <span class="brand-text">瞭望台</span>
-      </NuxtLink>
-
       <NuxtLink to="/" class="home-btn" :class="{ on: route.path === '/' }" title="返回首页">
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path
@@ -69,25 +64,6 @@ const isActive = (to: string) => {
   display: flex;
   align-items: center;
   gap: 16px;
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.2px;
-  color: #101828;
-}
-
-.brand-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #1f6feb, #4f46e5);
-  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.12);
 }
 
 .home-btn {
@@ -165,9 +141,6 @@ const isActive = (to: string) => {
   .inner {
     padding: 8px 14px;
     gap: 10px;
-  }
-  .brand-text {
-    display: none;
   }
   .home-label {
     display: none;
