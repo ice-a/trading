@@ -1,5 +1,6 @@
-import { getDb } from '../utils/mongo'
-import { listDnsRecords, updateDnsStatus, SITE_COLLECTIONS } from '../utils/site'
+import { env } from '../utils/env'
+import { sqlBatch } from '../utils/db'
+import { listDnsRecords, updateDnsStatus } from '../utils/site'
 
 /**
  * GET /api/dns?probe=1&source=auto
@@ -30,11 +31,11 @@ interface CfResponse {
 }
 
 function envToken(): string {
-  return String(process.env.CF_API_TOKEN || '').trim()
+  return env('CF_API_TOKEN', '')
 }
 
 function envZones(): string[] {
-  return String(process.env.CF_ZONE_IDS || '')
+  return env('CF_ZONE_IDS', '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -88,28 +89,22 @@ function toDoc(r: CfRecord): {
   }
 }
 
-/** 把 CF 拉到的记录 upsert 进本地缓存 */
+/** 把 CF 拉到的记录 upsert 进本地缓存（SQLite） */
 async function persist(records: CfRecord[]): Promise<void> {
   if (!records.length) return
-  const db = await getDb()
-  const col = db.collection(SITE_COLLECTIONS.dns)
-
-  const ops = records.map((r) => {
+  const nowIso = new Date().toISOString()
+  const stmts = records.map((r) => {
     const doc = toDoc(r)
     return {
-      updateOne: {
-        filter: { host: doc.host },
-        update: {
-          $set: { ...doc, updatedAt: new Date() },
-          $setOnInsert: { status: 'unknown', latencyMs: 0, createdAt: new Date() }
-        },
-        upsert: true
-      }
+      sql:
+        'insert into dns_records (host, name, type, target, proxied, updated_at, created_at) values (?,?,?,?,?,?,?) ' +
+        'on conflict (host) do update set name=excluded.name, type=excluded.type, target=excluded.target, ' +
+        'proxied=excluded.proxied, updated_at=excluded.updated_at',
+      params: [doc.host, doc.name, doc.type, doc.target, doc.proxied ? 1 : 0, nowIso, nowIso]
     }
   })
-
   try {
-    await col.bulkWrite(ops, { ordered: false })
+    await sqlBatch(stmts)
   } catch {
     /* 并发 upsert 可能有个别冲突，忽略 */
   }
@@ -188,8 +183,10 @@ export default defineEventHandler(async (event) => {
 
     items = rows.map((r) => {
       const p = resultMap.get(r.host)
-      return p ? { ...r, status: p.status, latencyMs: p.latencyMs, httpStatus: p.httpStatus, checkedAt: new Date() } : r
-    })
+      return p
+        ? { ...r, status: p.status, latencyMs: p.latencyMs, httpStatus: p.httpStatus, checkedAt: new Date() }
+        : r
+    }) as unknown as Array<Record<string, unknown>>
   } else {
     items = rows as unknown as Array<Record<string, unknown>>
   }

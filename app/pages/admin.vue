@@ -31,7 +31,7 @@ const message = ref('')
 const messageType = ref<'ok' | 'err'>('ok')
 
 const stats = ref<Stats | null>(null)
-const collections = ref<Array<{ key: string; label: string }>>([])
+const tables = ref<Array<{ key: string; label: string }>>([])
 const activeColl = ref('nav_links')
 const items = ref<AdminItem[]>([])
 const total = ref(0)
@@ -89,7 +89,7 @@ async function login() {
   if (!password.value.trim()) return
   loading.value = true
   try {
-    const res = await $fetch<{ ok: boolean; error?: string }>(apiUrl('/api/admin/login'), {
+    const res = await $fetch<{ ok: boolean; error?: string }>('/api/admin/login', {
       method: 'POST',
       body: { password: password.value }
     })
@@ -115,12 +115,12 @@ function logout() {
 
 async function loadStats() {
   try {
-    const res = await $fetch<{ ok: boolean; stats: Stats; collections: Array<{ key: string; label: string }> }>(
-      apiUrl('/api/admin/stats'),
+    const res = await $fetch<{ ok: boolean; stats: Stats; tables: Array<{ key: string; label: string }> }>(
+      '/api/admin/stats',
       { headers: headers() }
     )
     stats.value = res.stats
-    if (res.collections?.length) collections.value = res.collections
+    if (res.tables?.length) tables.value = res.tables
   } catch {
     flash('统计加载失败', 'err')
   }
@@ -130,7 +130,7 @@ async function loadList() {
   loading.value = true
   try {
     const res = await $fetch<{ ok: boolean; items: AdminItem[]; total: number; label?: string }>(
-      apiUrl('/api/admin/list'),
+      '/api/admin/list',
       { headers: headers(), query: { coll: activeColl.value, limit: 200, keyword: keyword.value } }
     )
     items.value = res.items || []
@@ -156,7 +156,7 @@ async function create() {
   }
   loading.value = true
   try {
-    const res = await $fetch<{ ok: boolean; error?: string }>(apiUrl('/api/admin/create'), {
+    const res = await $fetch<{ ok: boolean; error?: string }>('/api/admin/create', {
       method: 'POST',
       headers: headers(),
       body: { coll: activeColl.value, doc }
@@ -180,7 +180,7 @@ async function remove(item: AdminItem) {
   if (!window.confirm(`确定删除「${label}」？`)) return
   loading.value = true
   try {
-    const res = await $fetch<{ ok: boolean }>(apiUrl('/api/admin/delete'), {
+    const res = await $fetch<{ ok: boolean }>('/api/admin/delete', {
       method: 'POST',
       headers: headers(),
       body: { coll: activeColl.value, id: item.id }
@@ -254,10 +254,10 @@ useHead({ title: '数据后台 · 瞭望台' })
         </div>
       </section>
 
-      <!-- 集合切换 -->
+      <!-- 数据表切换 -->
       <div class="tabs">
         <button
-          v-for="c in collections"
+          v-for="c in tables"
           :key="c.key"
           class="tab"
           :class="{ on: activeColl === c.key }"
@@ -300,7 +300,7 @@ useHead({ title: '数据后台 · 瞭望台' })
             <button class="del" :disabled="loading" @click="remove(it)">删除</button>
           </div>
 
-          <p v-if="!items.length" class="empty">这个集合还没有数据</p>
+          <p v-if="!items.length" class="empty">这张表还没有数据</p>
         </div>
       </section>
 

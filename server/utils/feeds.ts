@@ -1,5 +1,5 @@
 import { FEEDS, CATEGORIES, type FeedCategory, type FeedRender, type FeedSpec } from '../config/feeds'
-import { getDb } from './mongo'
+import { sqlAll, sqlFirst, sqlRun, sqlBatch, type SqlStmt } from './db'
 import { httpFetch } from './http'
 
 /** 分类展示顺序（跟 config 里一致） */
@@ -49,7 +49,7 @@ export interface FeedDoc {
   lastTryAt: Date
 }
 
-const COLLECTION = 'feed_snapshots'
+// 快照落 feed_snapshots 表（key 为端点 key，payload 为归一化 JSON）
 const CONCURRENCY = 4
 const TIMEOUT_MS = 15_000
 
@@ -76,7 +76,6 @@ const FIELD_LABELS: Record<string, string> = {
   precipitation: '降水',
   wind_direction: '风向',
   wind_power: '风力',
-  air_quality: '空气质量',
   aqi: 'AQI',
   pm25: 'PM2.5',
   pm10: 'PM10',
@@ -90,7 +89,6 @@ const FIELD_LABELS: Record<string, string> = {
   legal_holiday: '法定假日',
   taboo: '宜忌',
   constellation: '星座',
-  base_code: '基准货币',
   rates: '汇率',
   updated: '上游更新时间',
   date: '日期',
@@ -429,7 +427,9 @@ export function isCollecting(): boolean {
   return collecting
 }
 
-/** 抓取全部端点并 upsert 到 MongoDB（失败不清空旧数据） */
+const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null)
+
+/** 抓取全部端点并 upsert 到 SQLite（失败不清空旧数据） */
 export async function collectFeeds(opts: { only?: string[] } = {}): Promise<CollectResult> {
   if (collecting) {
     return { total: 0, ok: 0, failed: 0, durationMs: 0, failures: [], at: new Date().toISOString() }
@@ -441,8 +441,6 @@ export async function collectFeeds(opts: { only?: string[] } = {}): Promise<Coll
 
   const started = Date.now()
   const base = appConfig().feedsBase
-  const db = await getDb()
-  const col = db.collection<FeedDoc>(COLLECTION)
 
   const results: Array<{ spec: FeedSpec; json: any | null; error: string | null; size: number }> = []
 
@@ -452,88 +450,88 @@ export async function collectFeeds(opts: { only?: string[] } = {}): Promise<Coll
       results.push(...(await Promise.all(batch.map((spec) => fetchOne(spec, base)))))
     }
 
-    const now = new Date()
-    const okOps: Parameters<typeof col.bulkWrite>[0] = []
-    const failOps: Parameters<typeof col.bulkWrite>[0] = []
+    const nowIso = new Date().toISOString()
+    const stmts: SqlStmt[] = []
     const failures: Array<{ key: string; error: string }> = []
+    let okCount = 0
 
     for (const r of results) {
       if (r.error || !r.json) {
         failures.push({ key: r.spec.key, error: r.error || 'empty' })
         // 只记录失败，保留上一次成功的数据
-        failOps.push({
-          updateOne: {
-            filter: { key: r.spec.key },
-            update: {
-              $set: { error: r.error || 'empty', lastTryAt: now, ok: false },
-              $setOnInsert: {
-                key: r.spec.key,
-                path: r.spec.path,
-                title: r.spec.title,
-                desc: r.spec.desc,
-                category: r.spec.category,
-                render: r.spec.render,
-                code: 0,
-                payload: null,
-                rawSize: 0,
-                payloadBytes: 0,
-                fetchedAt: now,
-                upstreamUpdatedAt: null
-              }
-            },
-            upsert: true
-          }
+        // 失败：15 列 → 6 个占位符 + ok=0 + code=? + error=? + payload=null
+        // + raw_size=0 + payload_bytes=0 + fetched_at=? + upstream_updated_at=null + last_try_at=?
+        stmts.push({
+          sql:
+            `insert into feed_snapshots
+               (key, path, title, descr, category, render, ok, code, error, payload,
+                raw_size, payload_bytes, fetched_at, upstream_updated_at, last_try_at)
+             values (?,?,?,?,?,?,0,?,?,null,0,0,?,null,?)
+             on conflict (key) do update set error = excluded.error, ok = 0, last_try_at = excluded.last_try_at`,
+          params: [
+            r.spec.key,
+            r.spec.path,
+            r.spec.title,
+            r.spec.desc || '',
+            r.spec.category,
+            r.spec.render,
+            0,
+            r.error || 'empty',
+            nowIso,
+            nowIso
+          ]
         })
         continue
       }
 
       const payload = normalize(r.spec, r.json.data)
-      okOps.push({
-        updateOne: {
-          filter: { key: r.spec.key },
-          update: {
-            $set: {
-              path: r.spec.path,
-              title: r.spec.title,
-              desc: r.spec.desc,
-              category: r.spec.category,
-              render: r.spec.render,
-              ok: true,
-              code: r.json.code,
-              error: null,
-              payload,
-              rawSize: r.size,
-              payloadBytes: JSON.stringify(payload).length,
-              fetchedAt: now,
-              upstreamUpdatedAt: upstreamUpdated(r.json.data),
-              lastTryAt: now
-            }
-          },
-          upsert: true
-        }
+      okCount++
+      stmts.push({
+        sql:
+          `insert into feed_snapshots
+             (key, path, title, descr, category, render, ok, code, error, payload,
+              raw_size, payload_bytes, fetched_at, upstream_updated_at, last_try_at)
+           values (?,?,?,?,?,?,1,?,null,?,?,?,?,?,?)
+           on conflict (key) do update set
+             path=excluded.path, title=excluded.title, descr=excluded.descr, category=excluded.category,
+             render=excluded.render, ok=1, code=excluded.code, error=null, payload=excluded.payload,
+             raw_size=excluded.raw_size, payload_bytes=excluded.payload_bytes,
+             fetched_at=excluded.fetched_at, upstream_updated_at=excluded.upstream_updated_at,
+             last_try_at=excluded.last_try_at`,
+        params: [
+          r.spec.key,
+          r.spec.path,
+          r.spec.title,
+          r.spec.desc || '',
+          r.spec.category,
+          r.spec.render,
+          r.json.code,
+          JSON.stringify(payload),
+          r.size,
+          JSON.stringify(payload).length,
+          nowIso,
+          iso(upstreamUpdated(r.json.data)),
+          nowIso
+        ]
       })
     }
 
-    if (okOps.length) await col.bulkWrite(okOps, { ordered: false })
-    if (failOps.length) await col.bulkWrite(failOps, { ordered: false })
+    await sqlBatch(stmts)
 
     // 全量抓取时才清理已下线端点；分片抓取（按需刷新）只抓了一部分，不能当孤儿删掉
     if (!opts.only?.length) {
       const validKeys = FEEDS.map((f) => f.key)
-      const removed = await col.deleteMany({ key: { $nin: validKeys } })
-      if (removed.deletedCount > 0) {
-        console.log(`[feeds] 清理已下线的端点数据 ${removed.deletedCount} 条`)
-      }
+      const marks = validKeys.map(() => '?').join(',')
+      await sqlRun(`delete from feed_snapshots where key not in (${marks})`, validKeys)
     }
 
     // 新数据已入库，立刻让接口缓存失效（下次请求读新数据并重新缓存）
     invalidateCache('feeds:')
-    invalidateCache(`feed:`)
+    invalidateCache('feed:')
 
-    const ok = okOps.length
     const result: CollectResult = {
       total: FEEDS.length,
-      ok,
+      ok: okCount,
       failed: failures.length,
       durationMs: Date.now() - started,
       failures,
@@ -549,22 +547,70 @@ export async function collectFeeds(opts: { only?: string[] } = {}): Promise<Coll
   }
 }
 
+interface FeedRow {
+  key: string
+  path: string
+  title: string
+  descr: string | null
+  category: string
+  render: string
+  ok: number
+  code: number
+  error: string | null
+  payload: string | null
+  raw_size: number
+  payload_bytes: number
+  fetched_at: string
+  upstream_updated_at: string | null
+  last_try_at: string
+}
+
+function rowToDoc(r: FeedRow): FeedDoc {
+  let payload: NormalizedPayload | null = null
+  try {
+    payload = r.payload ? (JSON.parse(r.payload) as NormalizedPayload) : null
+  } catch {
+    payload = null
+  }
+  return {
+    key: r.key,
+    path: r.path,
+    title: r.title,
+    desc: r.descr || undefined,
+    category: r.category as FeedCategory,
+    render: r.render as FeedDoc['render'],
+    ok: Boolean(r.ok),
+    code: r.code,
+    error: r.error,
+    payload,
+    rawSize: r.raw_size,
+    payloadBytes: r.payload_bytes,
+    fetchedAt: new Date(r.fetched_at),
+    upstreamUpdatedAt: r.upstream_updated_at ? new Date(r.upstream_updated_at) : null,
+    lastTryAt: new Date(r.last_try_at)
+  }
+}
+
 /**
  * 读取全部（或某个分类下）的端点数据。
  *
- * preview 存在时会用 MongoDB 的 $slice 投影，只取 list 类型的前 N 条——
- * 列表页一次拿 50 个端点，不裁剪的话单个响应能到 1MB+。
+ * preview 存在时裁剪 list 类型的前 N 条——列表页一次拿几十个端点，
+ * 不裁剪单个响应能到 1MB+。SQLite 没有 $slice 投影，读出 JSON 后在内存裁。
  */
 export async function readFeeds(category?: string, preview?: number): Promise<FeedDoc[]> {
-  const db = await getDb()
-  const col = db.collection<FeedDoc>(COLLECTION)
-  const filter = category && category !== 'all' ? { category } : {}
+  const where = category && category !== 'all' ? 'where category = ?' : ''
+  const params = where ? [category] : []
+  const rows = await sqlAll<FeedRow>(`select * from feed_snapshots ${where} order by key asc`, params as never)
 
-  const options = preview
-    ? { projection: { 'payload.items': { $slice: preview }, snapshots: 0 } }
-    : {}
+  const docs = rows.map(rowToDoc)
 
-  const docs = await col.find(filter, options as never).toArray()
+  if (preview) {
+    for (const d of docs) {
+      if (d.payload?.kind === 'list' && d.payload.items.length > preview) {
+        d.payload = { ...d.payload, items: d.payload.items.slice(0, preview) }
+      }
+    }
+  }
 
   // 按 config 里声明的分类顺序排，而不是字母序（否则 daily 会跑到最前面）
   const order = new Map(CATEGORY_ORDER.map((k, i) => [k, i]))
@@ -578,28 +624,23 @@ export async function readFeeds(category?: string, preview?: number): Promise<Fe
 }
 
 export async function readFeed(key: string): Promise<FeedDoc | null> {
-  const db = await getDb()
-  return db.collection<FeedDoc>(COLLECTION).findOne({ key })
+  const row = await sqlFirst<FeedRow>('select * from feed_snapshots where key = ?', [key])
+  return row ? rowToDoc(row) : null
 }
 
 /**
  * 按分类统计端点数量。
  *
  * 注意不能拿「当前筛选后的结果」去算：请求 ?category=hot 时只返回 hot 的数据，
- * 其他分类的角标就会全变 0。这里单独做一次分组聚合（只读 category 字段，很快）。
+ * 其他分类的角标就会全变 0。这里单独做一次 GROUP BY（只读 category 字段，很快）。
  */
 export async function countByCategory(): Promise<Record<string, number>> {
-  const db = await getDb()
-  const rows = await db
-    .collection<{ category?: string }>(COLLECTION)
-    .aggregate<{ _id: string; n: number }>([
-      { $group: { _id: '$category', n: { $sum: 1 } } }
-    ])
-    .toArray()
-
+  const rows = await sqlAll<{ category: string; n: number }>(
+    'select category, count(*) as n from feed_snapshots group by category'
+  )
   const out: Record<string, number> = {}
   for (const r of rows) {
-    if (r._id) out[r._id] = r.n
+    if (r.category) out[r.category] = r.n
   }
   return out
 }

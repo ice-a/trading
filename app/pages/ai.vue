@@ -2,7 +2,7 @@
 /**
  * /ai —— AI 资源台
  *
- * 板块（Tab）与条目都来自 MongoDB（ai_boards / ai_items）。
+ * 板块（Tab）与条目都来自 SQLite（ai_boards / ai_items）。
  */
 
 interface AiBoard {
@@ -34,7 +34,7 @@ const keyword = ref('')
 
 const { data, pending, error, refresh } = await useCachedData(
   () => `ai:${board.value}`,
-  () => $fetch<AiResponse>(apiUrl('/api/ai'), { query: { board: board.value } }),
+  () => $fetch<AiResponse>('/api/ai', { query: { board: board.value } }),
   { ttl: 300_000 }
 )
 
@@ -73,7 +73,7 @@ useHead({ title: 'AI 资源台 · 瞭望台' })
       <div class="hero-left">
         <h1>AI 资源台</h1>
         <p>
-          <b>{{ data?.total ?? 0 }}</b> 条资源 · 板块与条目均存于 MongoDB
+          <b>{{ data?.total ?? 0 }}</b> 条资源 · 板块与条目均存于 SQLite
         </p>
       </div>
       <button class="pill-btn" :class="{ spinning: pending }" @click="refresh()">

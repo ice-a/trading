@@ -1,11 +1,11 @@
-import { reposCol } from '../utils/mongo'
+import { sqlAll } from '../utils/db'
 import { dayKeyOf, humanDay } from '../utils/date'
 
 /**
- * GET /api/history —— 历史数据总览
+ * GET /api/history?period=daily —— 历史数据总览（SQLite 版）
  *
- * 返回每个有数据的日期 + 当天摘要（仓库数、掉榜数、今日增长合计、当天第一名），
- * 供 /history 页面做日期导航。一次聚合搞定，避免 N+1 查询。
+ * 返回每个有数据的日期 + 当天摘要（仓库数、掉榜数、增长合计、当天第一名）。
+ * 一条 GROUP BY 搞定；「第一名」用关联子查询取 bucket 最小、rank 最小的一行。
  */
 export default defineEventHandler(async (event) => {
   const cfg = appConfig()
@@ -17,49 +17,46 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
 
-  // 数据只在抓取时变化，TTL 略大于抓取间隔；抓取完成后会主动失效
   return withCache('history:overview:' + period, 65 * 60_000, async () => {
-    const col = await reposCol()
-
-    const rows = await col
-      .aggregate<{
-        _id: string
-        count: number
-        droppedCount: number
-        totalTodayStars: number
-        topRepo: string
-        topStars: number
-        pit: Date
-      }>([
-        // 先按周期过滤，再全局排序：同一天里 bucket 0 在前面、按名次升序
-        { $match: { period } },
-        { $sort: { date: -1, bucket: 1, rank: 1, todayStars: -1 } },
-        {
-          $group: {
-            _id: '$date',
-            count: { $sum: 1 },
-            droppedCount: { $sum: { $cond: ['$dropped', 1, 0] } },
-            totalTodayStars: { $sum: '$todayStars' },
-            topRepo: { $first: '$fullName' },
-            topStars: { $first: '$todayStars' },
-            pit: { $max: '$lastSeenAt' }
-          }
-        },
-        { $sort: { _id: -1 } },
-        { $limit: 180 }
-      ])
-      .toArray()
+    const rows = await sqlAll<{
+      date: string
+      count: number
+      dropped_count: number
+      total_today_stars: number
+      top_repo: string | null
+      top_stars: number | null
+      last_seen: string | null
+    }>(
+      `select
+         t.date,
+         count(*) as count,
+         sum(t.dropped) as dropped_count,
+         sum(t.today_stars) as total_today_stars,
+         max(t.last_seen_at) as last_seen,
+         (select full_name from trending_repos x
+            where x.date = t.date and x.period = t.period
+            order by x.bucket asc, x.rank asc limit 1) as top_repo,
+         (select today_stars from trending_repos x
+            where x.date = t.date and x.period = t.period
+            order by x.bucket asc, x.rank asc limit 1) as top_stars
+       from trending_repos t
+       where t.period = ?
+       group by t.date, t.period
+       order by t.date desc
+       limit 180`,
+      [period]
+    )
 
     const days = rows.map((r) => ({
-      date: r._id,
-      label: humanDay(r._id, cfg.timezone),
-      isToday: r._id === today,
+      date: r.date,
+      label: humanDay(r.date, cfg.timezone),
+      isToday: r.date === today,
       count: r.count ?? 0,
-      droppedCount: r.droppedCount ?? 0,
-      totalTodayStars: r.totalTodayStars ?? 0,
-      topRepo: r.topRepo || '',
-      topStars: r.topStars ?? 0,
-      lastSeenAt: r.pit ? new Date(r.pit).toISOString() : null
+      droppedCount: r.dropped_count ?? 0,
+      totalTodayStars: r.total_today_stars ?? 0,
+      topRepo: r.top_repo || '',
+      topStars: r.top_stars ?? 0,
+      lastSeenAt: r.last_seen || null
     }))
 
     return {

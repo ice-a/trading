@@ -18,7 +18,7 @@ const STYLES: Array<{ key: StyleKey; name: string }> = [
 const BGS = [
   { key: 'light', name: '浅色' },
   { key: 'dark', name: '深色' }
-]
+] as const
 
 const seed = ref(0)
 const style = ref<StyleKey>('blob')

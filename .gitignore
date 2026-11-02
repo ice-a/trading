@@ -9,7 +9,7 @@ node_modules
 .cache
 dist
 
-# env（含数据库口令，绝对不要提交）
+# env（含密码，绝对不要提交）
 .env
 .env.*
 !.env.example
@@ -26,15 +26,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# local data
+# 本地数据：SQLite 库与备份
 data
 tmp
-
-# wrangler local secrets
-.dev.vars
-.wrangler
-
-# build outputs for platforms
-.vercel
-.output
-

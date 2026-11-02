@@ -54,7 +54,7 @@ const page = ref(Number(route.query.p) > 0 ? Number(route.query.p) : 1)
 const { data, pending, error, refresh } = await useCachedData(
   () => `feeds:${category.value}:${CARD_ITEMS}`,
   () =>
-    $fetch<FeedsResponse>(apiUrl('/api/feeds'), {
+    $fetch<FeedsResponse>('/api/feeds', {
       query: { category: category.value, preview: CARD_ITEMS }
     }),
   { ttl: 300_000 }

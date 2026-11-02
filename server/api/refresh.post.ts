@@ -1,111 +1,83 @@
 import { runCrawl } from '../utils/crawler'
 import { collectFeeds } from '../utils/feeds'
 import { readMeta, touchMeta } from '../utils/store'
-import { FEEDS } from '../config/feeds'
+import { appConfig } from '../utils/config'
+import { invalidateCache } from '../utils/cache'
 
 /**
- * POST /api/refresh —— 按需刷新（替代定时任务）
+ * POST /api/refresh —— 按需刷新（页面打开 / 点刷新 / 每小时轮询共用）。
  *
- * 三种调用方式：
- *   · 打开页面        POST /api/refresh            距上次抓取 ≥ 1h 才真的抓，否则直接返回
- *   · 点「刷新」      POST /api/refresh?force=1    无条件立刻抓
- *   · 定时轮询        POST /api/refresh            前端每 1h 打一次，同样受 1h 节流
+ * 单机部署后这里是「真的抓」：没有流水线、没有令牌、不用等 CI。
+ * 抓取耗时 3~20 秒，所以请求返回就代表数据已经是新的。
  *
- * 抓取内容拆成两批，避免 Serverless 函数超时（Vercel Hobby 单次 10s）：
- *   target=trending  只抓 GitHub 日/周/月榜（约 5~8s，同步完成）
- *   target=feeds     抓热搜/资讯，用 shard 分片，每片 6 个端点（约 5~7s）
- *
- * 返回里带 nextCrawlAt，前端可以据此决定下次轮询时间。
+ * 节流：默认 1 小时内不重复抓，避免多标签页把 GitHub 抓挂；`?force=1` 无条件抓。
+ * 目标：`?target=all|github|feeds` 只刷其中一批。
  */
 
-const SHARD_SIZE = 6
-const MIN_INTERVAL_MS = 60 * 60 * 1000 // 1 小时
+const MIN_INTERVAL_MS = 60 * 60_000
 
 interface RefreshMeta {
   lastAutoCrawlAt?: string
-  lastForceCrawlAt?: string
+  lastTriggeredAt?: string
 }
 
 export default defineEventHandler(async (event) => {
-  if (getMethod(event) !== 'POST' && getMethod(event) !== 'GET') {
+  const method = getMethod(event)
+  if (method !== 'POST' && method !== 'GET') {
     setResponseStatus(event, 405)
     return { ok: false, error: '仅支持 POST / GET' }
   }
 
   const q = getQuery(event)
   const force = q.force === '1' || q.force === 'true'
-  const target = String(q.target || 'trending')
-  const shard = Number(q.shard || 0)
+  const targetRaw = String(q.target || 'all')
+  const target = (['all', 'github', 'feeds'].includes(targetRaw) ? targetRaw : 'all') as 'all' | 'github' | 'feeds'
 
   const meta = (await readMeta<RefreshMeta>()) || {}
-  const lastAt = meta.lastAutoCrawlAt ? new Date(meta.lastAutoCrawlAt).getTime() : 0
+  const lastAt = Math.max(
+    meta.lastAutoCrawlAt ? new Date(meta.lastAutoCrawlAt).getTime() : 0,
+    meta.lastTriggeredAt ? new Date(meta.lastTriggeredAt).getTime() : 0
+  )
   const elapsed = Date.now() - lastAt
   const due = force || elapsed >= MIN_INTERVAL_MS
 
-  const nextCrawlAt = new Date((force ? Date.now() : lastAt + MIN_INTERVAL_MS)).toISOString()
-
-  /* ---------- 还没到时间：直接返回，不抓 ---------- */
   if (!due) {
     return {
       ok: true,
       crawled: false,
       reason: '距离上次抓取不足 1 小时',
-      lastCrawlAt: meta.lastAutoCrawlAt ?? null,
-      nextCrawlAt,
       remainingMs: Math.max(0, MIN_INTERVAL_MS - elapsed)
     }
   }
 
-  /* ---------- feeds 分片 ---------- */
-  if (target === 'feeds') {
-    const total = FEEDS.length
-    const start = Math.max(0, Math.min(shard * SHARD_SIZE, total - 1))
-    const slice = FEEDS.slice(start, start + SHARD_SIZE)
+  const started = Date.now()
+  const cfg = appConfig()
 
-    const t0 = Date.now()
-    const result = await collectFeeds({ only: slice.map((f) => f.key) }).catch((e) => ({
-      total: 0,
-      ok: 0,
-      failed: 0,
-      errors: [e instanceof Error ? e.message : String(e)]
-    }))
+  const [github, feeds] = await Promise.allSettled([
+    target === 'feeds' ? Promise.resolve(null) : runCrawl(force ? 'manual' : 'schedule'),
+    target === 'github' || !cfg.feedsEnabled ? Promise.resolve(null) : collectFeeds()
+  ])
 
-    const nextShard = start + SHARD_SIZE < total ? shard + 1 : -1
+  await touchMeta({ lastAutoCrawlAt: new Date().toISOString() })
+  invalidateCache('')
 
-    return {
-      ok: true,
-      crawled: true,
-      target: 'feeds',
-      shard,
-      range: [start, start + slice.length - 1],
-      total,
-      nextShard,
-      durationMs: Date.now() - t0,
-      result,
-      nextCrawlAt
-    }
-  }
+  const gh = github.status === 'fulfilled' ? github.value : null
+  const fd = feeds.status === 'fulfilled' ? feeds.value : null
+  const reasonOf = (r: PromiseSettledResult<unknown>): string | null =>
+    r.status === 'rejected' ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : null
 
-  /* ---------- trending（默认）：同步抓完再返回 ---------- */
-  const t0 = Date.now()
-  const outcome = await runCrawl(force ? 'manual' : 'schedule').catch((e) => ({
-    ok: false,
-    error: e instanceof Error ? e.message : String(e),
-    fetched: 0,
-    durationMs: Date.now() - t0
-  }))
-
-  await touchMeta({
-    lastAutoCrawlAt: new Date().toISOString(),
-    lastTrigger: force ? 'force' : 'auto'
-  })
+  // ok 按 target 判定：只抓 feeds 时 github 本来就是 null，不能算失败
+  const ghOk = target === 'feeds' ? true : Boolean(gh?.ok)
+  const fdOk = target === 'github' ? true : fd !== null && fd.failed < fd.total
 
   return {
-    ok: true,
+    ok: ghOk && fdOk && !reasonOf(github) && !reasonOf(feeds),
     crawled: true,
-    target: 'trending',
-    durationMs: Date.now() - t0,
-    result: outcome,
-    nextCrawlAt: new Date(Date.now() + MIN_INTERVAL_MS).toISOString()
+    target,
+    durationMs: Date.now() - started,
+    github: gh && { fetched: gh.fetched, dropped: gh.dropped, skipped: Boolean(gh.skipped), error: gh.error },
+    githubError: reasonOf(github),
+    feeds: fd && { total: fd.total, ok: fd.ok, failed: fd.failed },
+    feedsError: reasonOf(feeds)
   }
 })

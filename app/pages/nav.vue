@@ -2,7 +2,7 @@
 /**
  * /nav —— 网站导航
  *
- * 数据全部来自 MongoDB（nav_categories / nav_links），往集合里插数据即可更新页面。
+ * 数据全部来自 SQLite（nav_categories / nav_links），往表里插数据即可更新页面。
  */
 
 interface NavLink {
@@ -38,7 +38,7 @@ const activeCat = ref('all')
 
 const { data, pending, error, refresh } = await useCachedData(
   () => 'nav:all',
-  () => $fetch<NavResponse>(apiUrl('/api/nav')),
+  () => $fetch<NavResponse>('/api/nav'),
   { ttl: 300_000 }
 )
 

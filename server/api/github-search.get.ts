@@ -1,3 +1,5 @@
+import { env } from '../utils/env'
+
 /**
  * GET /api/github-search?q=关键词&sort=stars&order=desc&page=1&perPage=30
  *
@@ -55,7 +57,7 @@ export default defineEventHandler(async (event) => {
 
   // 用户自带的 token 优先（页面输入框填的那个）
   const userToken = String(getHeader(event, 'x-github-token') || '').trim()
-  const serverToken = String(process.env.GITHUB_TOKEN || '').trim()
+  const serverToken = env('GITHUB_TOKEN', '')
   let token = userToken || serverToken
   let tokenSource: 'user' | 'server' | 'anonymous' = userToken ? 'user' : serverToken ? 'server' : 'anonymous'
 

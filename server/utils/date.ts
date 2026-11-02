@@ -1,7 +1,7 @@
 /**
  * 时区日期工具。
  * "今日" 的口径由 APP_TIMEZONE 决定（默认 Asia/Shanghai），
- * 全部榜单文档都以 `date: 'YYYY-MM-DD'` 作为分区键落在 MongoDB 里。
+ * 全部榜单记录都以 `date: 'YYYY-MM-DD'` 作为分区键落在 SQLite 里。
  */
 
 export function dayKeyOf(date: Date = new Date(), timeZone = 'Asia/Shanghai'): string {

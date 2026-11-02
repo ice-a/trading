@@ -1,6 +1,6 @@
-import { reposCol } from '../utils/mongo'
+import { getDayRepos, listDays } from '../utils/store'
 import { dayKeyOf, humanDay, isValidDayKey, relativeTime } from '../utils/date'
-import { listDays } from '../utils/store'
+import type { Bucket, TrendingRepoView, TrendingPeriod } from '../utils/types'
 
 /**
  * GET /api/trending-bundle?date=YYYY-MM-DD&pageSize=10
@@ -9,10 +9,9 @@ import { listDays } from '../utils/store'
  *
  * 为什么要这个接口：首页切换日/周/月时，原来每切一次都要发一次 SSR 请求 + 查一次库，
  * 部署在 Serverless 上还会叠加冷启动，表现为「切换很卡」。
- * 三个周期加起来也就 40~60 条文档（几十 KB），一次取全、前端本地切换，切换就没有等待了。
+ * 三个周期加起来也就 40~60 条记录（几十 KB），一次取全、前端本地切换，切换就没有等待了。
  *
- * 实现上用 4 个简单查询（1 次 find + 3 次 count），不用 $facet ——
- * $facet 在跨洋链路上容易踩到执行计划退化，直接把请求拖到超时。
+ * SQLite 版：三条按 (date, period) 主键前缀的查询 + 一条日期列表，共 4 次往返。
  */
 const PERIODS = ['daily', 'weekly', 'monthly'] as const
 type P = (typeof PERIODS)[number]
@@ -33,44 +32,20 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
 
   return withCache(`trending-bundle:${date}:${pageSize}`, 10 * 60_000, async () => {
-    const col = await reposCol()
+    const [daily, weekly, monthly, days] = await Promise.all([
+      getDayRepos(date, 'daily'),
+      getDayRepos(date, 'weekly'),
+      getDayRepos(date, 'monthly'),
+      listDays(60)
+    ])
 
-    // 1) 三个周期各自的前 pageSize 名（bucket=0），一次 find 拿回来
-    const rows = await col
-      .find(
-        { date, period: { $in: [...PERIODS] }, bucket: 0 },
-        { projection: { snapshots: 0 } }
-      )
-      .sort({ period: 1, rank: 1 })
-      .toArray()
-
-    const grouped: Record<string, Array<Record<string, unknown>>> = { daily: [], weekly: [], monthly: [] }
-    for (const r of rows) {
-      const d = r as unknown as Record<string, unknown>
-      const p = String(d.period || 'daily')
-      if (!grouped[p]) grouped[p] = []
-      if (grouped[p].length < pageSize) grouped[p].push(d)
-    }
-
-    // 2) 三个周期的总数 / 掉榜数（走 (date, period) 前缀索引，很快）
-    const statsMap = new Map<P, { total: number; top: number; dropped: number; stars: number }>()
-    await Promise.all(
-      PERIODS.map(async (p) => {
-        const [total, dropped] = await Promise.all([
-          col.countDocuments({ date, period: p }),
-          col.countDocuments({ date, period: p, dropped: true })
-        ])
-        statsMap.set(p, { total, top: grouped[p]?.length ?? 0, dropped, stars: 0 })
-      })
-    )
-
-    const days = await listDays(60)
-
-    const latest = await col.find({ date }, { projection: { lastSeenAt: 1 } }).sort({ lastSeenAt: -1 }).limit(1).toArray()
-    const updatedAt = latest[0]?.lastSeenAt ? new Date(latest[0].lastSeenAt as Date) : null
+    const grouped: Record<string, typeof daily> = { daily, weekly, monthly }
 
     const build = (p: P) => {
-      const s = statsMap.get(p) ?? { total: 0, top: 0, dropped: 0, stars: 0 }
+      const docs = grouped[p] ?? []
+      const topCount = docs.filter((d) => d.bucket === 0).length
+      const latest = docs.reduce<number>((max, d) => Math.max(max, d.lastSeenAt?.getTime() ?? 0), 0)
+      const updatedAt = latest ? new Date(latest) : null
       return {
         date,
         period: p,
@@ -78,35 +53,22 @@ export default defineEventHandler(async (event) => {
         isToday: date === today,
         page: 1,
         pageSize,
-        total: s.total,
-        totalPages: Math.max(1, Math.ceil(s.top / pageSize)),
+        total: docs.length,
+        totalPages: Math.max(1, Math.ceil(topCount / pageSize)),
         updatedAt: updatedAt ? updatedAt.toISOString() : null,
         updatedAgo: updatedAt ? relativeTime(updatedAt) : '暂无数据',
         topN: cfg.topN,
         days,
         stats: {
-          tracked: s.total,
-          topCount: s.top,
-          droppedCount: s.dropped,
-          totalTodayStars: s.stars
+          tracked: docs.length,
+          topCount,
+          droppedCount: docs.filter((d) => d.dropped).length,
+          totalTodayStars: docs.reduce((s, d) => s + (d.todayStars || 0), 0)
         },
-        items: (grouped[p] ?? []).map((d) => ({
-          rank: d.rank,
-          repoKey: d.repoKey,
-          owner: d.owner,
-          name: d.name,
-          fullName: d.fullName,
-          url: d.url,
-          description: d.description,
-          language: d.language,
-          languageColor: d.languageColor,
-          totalStars: d.totalStars,
-          forks: d.forks,
-          todayStars: d.todayStars,
-          bestRank: d.bestRank,
-          bucket: d.bucket,
-          dropped: d.dropped
-        }))
+        items: docs
+          .filter((d) => d.bucket === 0)
+          .slice(0, pageSize)
+          .map(toView)
       }
     }
 
@@ -121,3 +83,23 @@ export default defineEventHandler(async (event) => {
     }
   })
 })
+
+function toView(doc: Awaited<ReturnType<typeof getDayRepos>>[number]): TrendingRepoView {
+  return {
+    rank: doc.rank ?? null,
+    owner: doc.owner,
+    name: doc.name,
+    fullName: doc.fullName,
+    url: doc.url,
+    description: doc.description || '',
+    language: doc.language || 'Unknown',
+    languageColor: doc.languageColor || '#8b949e',
+    totalStars: doc.totalStars ?? 0,
+    forks: doc.forks ?? 0,
+    todayStars: doc.todayStars ?? 0,
+    bucket: (doc.bucket ?? 0) as Bucket,
+    dropped: Boolean(doc.dropped),
+    firstSeenAt: doc.firstSeenAt ? new Date(doc.firstSeenAt).toISOString() : null,
+    lastSeenAt: doc.lastSeenAt ? new Date(doc.lastSeenAt).toISOString() : null
+  }
+}

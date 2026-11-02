@@ -22,7 +22,7 @@ async function onShare(e: MouseEvent) {
 
   loading.value = true
   try {
-    const res = await $fetch<{ path: string }>(apiUrl('/api/share'), {
+    const res = await $fetch<{ path: string }>('/api/share', {
       method: 'POST',
       body: {
         type: props.type,

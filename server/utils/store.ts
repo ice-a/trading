@@ -1,18 +1,14 @@
-import { ObjectId } from 'mongodb'
-import { getDb, reposCol, runsCol, COLLECTIONS } from './mongo'
+import { sqlAll, sqlFirst, sqlRun, sqlBatch, type SqlStmt } from './db'
 import type { Bucket, CrawlRunDoc, ParsedRepo, TrendingRepoDoc, DayOption, TrendingPeriod } from './types'
 import { dayKeyOf } from './date'
 
 /**
- * 入库：一条文档 = 一天 + 一个仓库。
+ * 入库（SQLite 版）：一条记录 = 一天 + 一个周期 + 一个仓库。
  *
- * 关键行为（严格对应需求）：
- * 1. 同一个仓库同一天只 upsert，不插入重复文档 —— 每次更新都是覆盖指标
- * 2. 分页靠 bucket 实现：
- *      bucket 0 → 今日前 N 名（首页第一页只查这些）
- *      bucket 1 → 当日榜内但已掉出前 N 名
- *      bucket 2 → 当日曾经上榜、现在彻底掉出 trending 的历史记录
- * 3. 掉榜绝不删除，只降 bucket，翻页时仍能读到
+ * 关键行为与 Mongo 版完全一致：
+ * 1. 同一个 (date, period, repoKey) 只 upsert，不插重复行
+ * 2. bucket 0 = 前 N 名；1 = 榜内其他；2 = 已掉榜
+ * 3. 掉榜绝不删除，只降 bucket，翻页仍读到
  */
 
 const SNAPSHOT_KEEP = 48
@@ -26,11 +22,24 @@ export interface SaveResult {
   tracked: number
 }
 
+interface ExistingRow {
+  repo_key: string
+  rank: number | null
+  bucket: number
+  best_rank: number | null
+  dropped: number
+  today_stars: number
+  first_seen_at: string
+  snapshots: string
+}
+
+const iso = (d: Date | string | null | undefined): string | null =>
+  d ? new Date(d).toISOString() : null
+
 export async function saveDailySnapshot(params: {
   repos: ParsedRepo[]
   date?: string
   topN?: number
-  /** 榜单周期，默认 daily */
   period?: TrendingPeriod
 }): Promise<SaveResult> {
   const cfg = appConfig()
@@ -42,164 +51,222 @@ export async function saveDailySnapshot(params: {
     return { date, fetched: 0, upserted: 0, modified: 0, dropped: 0, tracked: 0 }
   }
 
-  const col = await reposCol()
   const now = new Date()
+  const nowIso = now.toISOString()
 
-  // 当天已有的记录（用于判断谁掉榜、算最优名次）
-  const existing = await col
-    .find({ date, period }, { projection: { repoKey: 1, rank: 1, bucket: 1, bestRank: 1, dropped: 1, todayStars: 1 } })
-    .toArray()
-  const existingMap = new Map(existing.map((d) => [d.repoKey, d]))
+  const existing = await sqlAll<ExistingRow>(
+    'select repo_key, rank, bucket, best_rank, dropped, today_stars, first_seen_at, snapshots ' +
+      'from trending_repos where date = ? and period = ?',
+    [date, period]
+  )
+  const existingMap = new Map(existing.map((d) => [d.repo_key, d]))
 
   const incoming = new Set(repos.map((r) => r.repoKey))
-  const ops: Parameters<typeof col.bulkWrite>[0] = []
+  const stmts: SqlStmt[] = []
 
   for (const repo of repos) {
     const prev = existingMap.get(repo.repoKey)
     const rank = repo.rank
     const bucket: Bucket = rank <= topN ? 0 : 1
-    const bestRank =
-      prev?.bestRank != null ? Math.min(prev.bestRank, rank) : rank
+    const bestRank = prev?.best_rank != null ? Math.min(prev.best_rank, rank) : rank
 
-    ops.push({
-      updateOne: {
-        filter: { date, period, repoKey: repo.repoKey },
-        update: {
-          $set: {
-            owner: repo.owner,
-            name: repo.name,
-            fullName: repo.fullName,
-            url: repo.url,
-            description: repo.description,
-            language: repo.language,
-            languageColor: repo.languageColor,
-            totalStars: repo.totalStars,
-            forks: repo.forks,
-            todayStars: repo.todayStars,
-            rank,
-            bestRank,
-            bucket,
-            dropped: false,
-            droppedAt: null,
-            lastSeenAt: now,
-            updatedAt: now
-          },
-          $setOnInsert: {
-            date,
-            period,
-            repoKey: repo.repoKey,
-            firstSeenAt: now,
-            createdAt: now
-          },
-          $push: {
-            snapshots: {
-              $each: [{ at: now, todayStars: repo.todayStars, totalStars: repo.totalStars, rank }],
-              $slice: -SNAPSHOT_KEEP
-            }
-          }
-        },
-        upsert: true
-      }
+    // 时间序列：追加本次采样，保留最近 48 个
+    let snaps: unknown[] = []
+    try {
+      snaps = JSON.parse(prev?.snapshots || '[]')
+    } catch {
+      snaps = []
+    }
+    snaps.push({ at: nowIso, todayStars: repo.todayStars, totalStars: repo.totalStars, rank })
+    if (snaps.length > SNAPSHOT_KEEP) snaps = snaps.slice(-SNAPSHOT_KEEP)
+
+    stmts.push({
+      sql:
+        `insert into trending_repos
+           (date, period, repo_key, owner, name, full_name, url, description, language, language_color,
+            total_stars, forks, today_stars, rank, best_rank, bucket, dropped, dropped_at,
+            first_seen_at, last_seen_at, snapshots, created_at, updated_at)
+         values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         on conflict (date, period, repo_key) do update set
+           owner=excluded.owner, name=excluded.name, full_name=excluded.full_name, url=excluded.url,
+           description=excluded.description, language=excluded.language, language_color=excluded.language_color,
+           total_stars=excluded.total_stars, forks=excluded.forks, today_stars=excluded.today_stars,
+           rank=excluded.rank,
+           best_rank=min(coalesce(trending_repos.best_rank, 2147483647), excluded.best_rank),
+           bucket=excluded.bucket, dropped=0, dropped_at=null,
+           last_seen_at=excluded.last_seen_at, snapshots=excluded.snapshots, updated_at=excluded.updated_at`,
+      params: [
+        date,
+        period,
+        repo.repoKey,
+        repo.owner,
+        repo.name,
+        repo.fullName,
+        repo.url,
+        repo.description,
+        repo.language,
+        repo.languageColor,
+        repo.totalStars,
+        repo.forks,
+        repo.todayStars,
+        rank,
+        bestRank,
+        bucket,
+        0,
+        null,
+        prev?.first_seen_at || nowIso,
+        nowIso,
+        JSON.stringify(snaps),
+        nowIso,
+        nowIso
+      ]
     })
   }
 
-  // 本次没抓到、但当天库里有记录的仓库 → 保留，降级为「掉榜」
-  const dropOps: Parameters<typeof col.bulkWrite>[0] = []
+  // 本次没抓到、但当天库里有记录的 → 保留，降级为「掉榜」
+  let dropped = 0
+  const dropStmts: SqlStmt[] = []
   for (const doc of existing) {
-    if (incoming.has(doc.repoKey)) continue
+    if (incoming.has(doc.repo_key)) continue
     if (doc.dropped) continue
-    dropOps.push({
-      updateOne: {
-        filter: { date, period, repoKey: doc.repoKey },
-        update: {
-          $set: {
-            bucket: 2 as Bucket,
-            rank: null,
-            dropped: true,
-            droppedAt: now,
-            updatedAt: now
-          }
-        }
-      }
+    dropped++
+    dropStmts.push({
+      sql:
+        'update trending_repos set bucket = 2, rank = null, dropped = 1, dropped_at = ?, updated_at = ? ' +
+        'where date = ? and period = ? and repo_key = ?',
+      params: [nowIso, nowIso, date, period, doc.repo_key]
     })
   }
 
-  let upserted = 0
-  let modified = 0
-  if (ops.length) {
-    const res = await col.bulkWrite(ops, { ordered: false })
-    upserted += res.upsertedCount ?? 0
-    modified += res.modifiedCount ?? 0
-  }
-  if (dropOps.length) {
-    const res = await col.bulkWrite(dropOps, { ordered: false })
-    modified += res.modifiedCount ?? 0
-  }
+  await sqlBatch([...stmts, ...dropStmts])
 
-  const tracked = await col.countDocuments({ date, period })
+  const tracked = await sqlFirst<{ n: number }>(
+    'select count(*) as n from trending_repos where date = ? and period = ?',
+    [date, period]
+  )
 
-  return { date, fetched: repos.length, upserted, modified, dropped: dropOps.length, tracked }
+  return {
+    date,
+    fetched: repos.length,
+    upserted: stmts.length,
+    modified: stmts.length,
+    dropped,
+    tracked: tracked?.n ?? 0
+  }
 }
 
 export async function logCrawlRun(doc: CrawlRunDoc): Promise<void> {
-  try {
-    const col = await runsCol()
-    await col.insertOne(doc)
-  } catch (err) {
-    console.error('[crawl] 写入抓取日志失败:', err)
-  }
+  await sqlRun(
+    `insert into crawl_runs
+       (date, started_at, finished_at, duration_ms, source, fetched, upserted, modified, dropped, ok, error, triggered_by)
+     values (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      doc.date,
+      iso(doc.startedAt),
+      iso(doc.finishedAt),
+      doc.durationMs,
+      doc.source,
+      doc.fetched,
+      doc.upserted,
+      doc.modified,
+      doc.dropped,
+      doc.ok ? 1 : 0,
+      doc.error ?? null,
+      doc.trigger
+    ]
+  )
 }
 
 export async function touchMeta(patch: Record<string, unknown>): Promise<void> {
+  const nowIso = new Date().toISOString()
+  const existing = await sqlFirst<{ value: string }>('select value from app_meta where key = ?', ['app'])
+  let merged: Record<string, unknown> = {}
   try {
-    const db = await getDb()
-    const col = db.collection(COLLECTIONS.meta)
-    await col.updateOne(
-      { key: 'crawl_state' },
-      { $set: { ...patch, updatedAt: new Date() }, $setOnInsert: { key: 'crawl_state', createdAt: new Date() } },
-      { upsert: true }
-    )
-  } catch (err) {
-    console.error('[crawl] 写入 meta 失败:', err)
+    merged = JSON.parse(existing?.value || '{}')
+  } catch {
+    merged = {}
+  }
+  Object.assign(merged, patch)
+  if (existing) {
+    await sqlRun('update app_meta set value = ?, updated_at = ? where key = ?', [JSON.stringify(merged), nowIso, 'app'])
+  } else {
+    await sqlRun('insert into app_meta (key, value, updated_at) values (?, ?, ?)', ['app', JSON.stringify(merged), nowIso])
   }
 }
 
 export async function readMeta<T = Record<string, unknown>>(): Promise<T | null> {
-  const db = await getDb()
-  const col = db.collection(COLLECTIONS.meta)
-  const doc = await col.findOne({ key: 'crawl_state' })
-  if (!doc) return null
-  const { _id, ...rest } = doc as Record<string, unknown> & { _id?: ObjectId }
-  void _id
-  return rest as T
+  const row = await sqlFirst<{ value: string }>('select value from app_meta where key = ?', ['app'])
+  if (!row) return null
+  try {
+    return JSON.parse(row.value) as T
+  } catch {
+    return null
+  }
 }
 
-/** 取有数据的日期列表（降序），用于历史日期切换；不传 period 则统计全部周期 */
+/** 取有数据的日期列表（降序）；period 不传则统计全部周期 */
 export async function listDays(limit = 60, period?: TrendingPeriod): Promise<DayOption[]> {
-  const col = await reposCol()
   const cfg = appConfig()
   const today = dayKeyOf(new Date(), cfg.timezone)
-  const stages: Record<string, unknown>[] = []
-  if (period) stages.push({ $match: { period } })
-  stages.push(
-    { $group: { _id: '$date', count: { $sum: 1 } } },
-    { $sort: { _id: -1 } },
-    { $limit: limit }
+  const where = period ? 'where period = ?' : ''
+  const params: unknown[] = period ? [period, limit] : [limit]
+  const rows = await sqlAll<{ date: string; count: number }>(
+    `select date, count(*) as count from trending_repos ${where} group by date order by date desc limit ?`,
+    params
   )
-  const rows = await col.aggregate<{ _id: string; count: number }>(stages).toArray()
-  return rows.map((r) => ({ date: r._id, count: r.count, isToday: r._id === today }))
+  return rows.map((r) => ({ date: r.date, count: r.count, isToday: r.date === today }))
 }
 
-/** 取某天某周期第一页（前 N 名） */
-export async function getTopRepos(
+/** 某天的全部行（bucket/rank 排序），API 层做分页 */
+export async function getDayRepos(
   date: string,
-  limit: number,
-  period: TrendingPeriod = 'daily'
+  period: TrendingPeriod
 ): Promise<TrendingRepoDoc[]> {
-  const col = await reposCol()
-  return col
-    .find({ date, period, bucket: 0 })
-    .sort({ rank: 1 })
-    .limit(limit)
-    .toArray()
+  const rows = await sqlAll<Record<string, unknown>>(
+    'select * from trending_repos where date = ? and period = ? order by bucket asc, rank asc, today_stars desc',
+    [date, period]
+  )
+  return rows.map(rowToDoc)
+}
+
+/** 有数据的日期集合（预渲染 /v2/[key] 用） */
+export async function latestRunAt(): Promise<string | null> {
+  const row = await sqlFirst<{ t: string }>(
+    'select max(last_seen_at) as t from trending_repos'
+  )
+  return row?.t ?? null
+}
+
+function rowToDoc(r: Record<string, unknown>): TrendingRepoDoc {
+  let snaps: TrendingRepoDoc['snapshots'] = []
+  try {
+    snaps = JSON.parse(String(r.snapshots || '[]'))
+  } catch {
+    snaps = []
+  }
+  return {
+    date: String(r.date),
+    period: (String(r.period || 'daily') as TrendingPeriod) || 'daily',
+    repoKey: String(r.repo_key),
+    owner: String(r.owner),
+    name: String(r.name),
+    fullName: String(r.full_name),
+    url: String(r.url),
+    description: String(r.description || ''),
+    language: String(r.language || ''),
+    languageColor: String(r.language_color || ''),
+    totalStars: Number(r.total_stars) || 0,
+    forks: Number(r.forks) || 0,
+    todayStars: Number(r.today_stars) || 0,
+    rank: r.rank == null ? null : Number(r.rank),
+    bestRank: r.best_rank == null ? null : Number(r.best_rank),
+    bucket: (Number(r.bucket) || 0) as Bucket,
+    dropped: Boolean(r.dropped),
+    droppedAt: r.dropped_at ? new Date(String(r.dropped_at)) : null,
+    firstSeenAt: new Date(String(r.first_seen_at)),
+    lastSeenAt: new Date(String(r.last_seen_at)),
+    snapshots: snaps,
+    createdAt: new Date(String(r.created_at)),
+    updatedAt: new Date(String(r.updated_at))
+  }
 }

@@ -1,37 +1,132 @@
-import { getDb } from '../../utils/mongo'
-import { SITE_COLLECTIONS, siteStats } from '../../utils/site'
+import { sqlAll, sqlFirst, sqlRun, pingDb } from '../../utils/db'
+import { siteStats } from '../../utils/site'
+import { env } from '../../utils/env'
 
 /**
- * /api/admin/[action] —— 简易后台接口
+ * /api/admin/[action] —— 简易后台（SQLite 版）
  *
  *   POST /api/admin/login   { password }                     → { ok, token }
- *   GET  /api/admin/stats                                     → 各集合数量
+ *   GET  /api/admin/stats                                     → 各表数量
  *   GET  /api/admin/list?coll=nav_links|ai_items&keyword=&limit=
  *   POST /api/admin/create  { coll, doc }
  *   POST /api/admin/delete  { coll, id }
- *   POST /api/admin/update  { coll, id, patch }
  *
  * 鉴权：请求头 x-admin-password 或 query.pw，需匹配环境变量 ADMIN_PASSWORD（默认 admin123）。
- * 只开放可写集合白名单，避免误改榜单数据。
+ * 表名/列名全部走白名单映射，绝不用用户输入拼 SQL。
  */
 
-const ALLOWED = {
-  nav_links: { label: '导航站点', required: ['name', 'url'], extra: ['catelog', 'group', 'desc', 'icon', 'sort'] },
-  nav_categories: { label: '导航分类', required: ['key', 'name'], extra: ['group', 'icon', 'sort'] },
-  ai_items: { label: 'AI 资源', required: ['board', 'name'], extra: ['url', 'desc', 'models', 'ratio', 'tags', 'content', 'sort'] },
-  ai_boards: { label: 'AI 板块', required: ['key', 'name'], extra: ['icon', 'sort'] },
-  github_creators: { label: 'GitHub 用户', required: ['login'], extra: ['note', 'sort'] }
-} as const
-
-type CollKey = keyof typeof ALLOWED
-
-function passwordOf(): string {
-  return process.env.ADMIN_PASSWORD || 'admin123'
+interface FieldDef {
+  /** API 字段名（前端传的 doc 的 key） */
+  key: string
+  /** 表列名 */
+  col: string
+  required?: boolean
+  kind?: 'string' | 'int' | 'json'
 }
 
-function checkAuth(event: { node: { req: { headers: Record<string, unknown> } } }): boolean {
-  const header = String((event.node.req.headers['x-admin-password'] || '') as string)
-  const query = String(getQuery(event as never).pw || '')
+interface TableDef {
+  label: string
+  table: string
+  pk: string
+  pkAuto: boolean
+  fields: FieldDef[]
+  orderBy: string
+  searchCols: string[]
+}
+
+const TABLES: Record<string, TableDef> = {
+  nav_links: {
+    label: '导航站点',
+    table: 'nav_links',
+    pk: 'id',
+    pkAuto: true,
+    orderBy: 'sort asc, name asc',
+    searchCols: ['name', 'url', 'descr'],
+    fields: [
+      { key: 'name', col: 'name', required: true },
+      { key: 'url', col: 'url', required: true },
+      { key: 'catelog', col: 'catelog' },
+      { key: 'group', col: 'grp' },
+      { key: 'desc', col: 'descr' },
+      { key: 'icon', col: 'icon' },
+      { key: 'sort', col: 'sort', kind: 'int' }
+    ]
+  },
+  nav_categories: {
+    label: '导航分类',
+    table: 'nav_categories',
+    pk: 'key',
+    pkAuto: false,
+    orderBy: 'grp asc, sort asc',
+    searchCols: ['key', 'name', 'grp'],
+    fields: [
+      { key: 'key', col: 'key', required: true },
+      { key: 'name', col: 'name', required: true },
+      { key: 'group', col: 'grp' },
+      { key: 'icon', col: 'icon' },
+      { key: 'sort', col: 'sort', kind: 'int' }
+    ]
+  },
+  ai_items: {
+    label: 'AI 资源',
+    table: 'ai_items',
+    pk: 'id',
+    pkAuto: true,
+    orderBy: 'sort asc, name asc',
+    searchCols: ['name', 'url', 'descr', 'board'],
+    fields: [
+      { key: 'board', col: 'board', required: true },
+      { key: 'name', col: 'name', required: true },
+      { key: 'url', col: 'url' },
+      { key: 'desc', col: 'descr' },
+      { key: 'models', col: 'models' },
+      { key: 'ratio', col: 'ratio' },
+      { key: 'tags', col: 'tags', kind: 'json' },
+      { key: 'sort', col: 'sort', kind: 'int' }
+    ]
+  },
+  ai_boards: {
+    label: 'AI 板块',
+    table: 'ai_boards',
+    pk: 'key',
+    pkAuto: false,
+    orderBy: 'sort asc',
+    searchCols: ['key', 'name'],
+    fields: [
+      { key: 'key', col: 'key', required: true },
+      { key: 'name', col: 'name', required: true },
+      { key: 'icon', col: 'icon' },
+      { key: 'sort', col: 'sort', kind: 'int' }
+    ]
+  },
+  github_creators: {
+    label: 'GitHub 用户',
+    table: 'github_creators',
+    pk: 'login',
+    pkAuto: false,
+    orderBy: 'sort asc, login asc',
+    searchCols: ['login', 'note'],
+    fields: [
+      { key: 'login', col: 'login', required: true },
+      { key: 'note', col: 'note' },
+      { key: 'sort', col: 'sort', kind: 'int' }
+    ]
+  }
+}
+
+function passwordOf(): string {
+  return env('ADMIN_PASSWORD', 'admin123')
+}
+
+/**
+ * 鉴权：请求头 x-admin-password 或 query.pw。
+ *
+ * 重构点：原实现读 event.node.req.headers —— 那是 Node server 专有对象，
+ * workerd 里没有 event.node，会在 Cloudflare 上直接抛错。统一走 getHeader/getQuery。
+ */
+function checkAuth(event: Parameters<typeof getHeader>[0]): boolean {
+  const header = String(getHeader(event, 'x-admin-password') || '')
+  const query = String(getQuery(event).pw || '')
   return (header || query) === passwordOf()
 }
 
@@ -49,67 +144,81 @@ export default defineEventHandler(async (event) => {
     return { ok: true, token: passwordOf() }
   }
 
-  /* ---- 以下都需要鉴权 ---- */
-  if (!checkAuth(event as never)) {
+  if (!checkAuth(event)) {
     setResponseStatus(event, 401)
     return { ok: false, error: '未鉴权' }
   }
 
-  const db = await getDb()
-
   /* ---- 统计 ---- */
   if (action === 'stats' && method === 'GET') {
-    const stats = await siteStats()
+    const [stats, ping] = await Promise.all([siteStats(), pingDb()])
     const [repos, feeds, runs] = await Promise.all([
-      db.collection('trending_repos').countDocuments().catch(() => 0),
-      db.collection('feed_snapshots').countDocuments().catch(() => 0),
-      db.collection('crawl_runs').countDocuments().catch(() => 0)
+      sqlFirst<{ n: number }>('select count(*) as n from trending_repos').catch(() => null),
+      sqlFirst<{ n: number }>('select count(*) as n from feed_snapshots').catch(() => null),
+      sqlFirst<{ n: number }>('select count(*) as n from crawl_runs').catch(() => null)
     ])
     return {
       ok: true,
+      storage: 'sqlite',
+      dbLatencyMs: ping.latencyMs,
       stats: {
         ...stats,
-        trendingRepos: repos,
-        feedSnapshots: feeds,
-        crawlRuns: runs
+        trendingRepos: repos?.n ?? 0,
+        feedSnapshots: feeds?.n ?? 0,
+        crawlRuns: runs?.n ?? 0
       },
-      collections: Object.entries(ALLOWED).map(([key, v]) => ({ key, label: v.label }))
+      tables: Object.entries(TABLES).map(([key, v]) => ({ key, label: v.label }))
     }
   }
 
   /* ---- 列表 ---- */
   if (action === 'list' && method === 'GET') {
     const q = getQuery(event)
-    const coll = String(q.coll || 'nav_links') as CollKey
-    if (!ALLOWED[coll]) {
+    const coll = String(q.coll || 'nav_links')
+    const def = TABLES[coll]
+    if (!def) {
       setResponseStatus(event, 400)
-      return { ok: false, error: '集合不在白名单内' }
+      return { ok: false, error: '表不在白名单内' }
     }
     const limit = Math.min(Math.max(Number(q.limit) || 60, 1), 500)
     const kw = String(q.keyword || '').trim()
 
-    const filter: Record<string, unknown> = {}
+    const where: string[] = ["status <> 'inactive'"]
+    const params: unknown[] = []
     if (kw) {
-      const re = { $regex: kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' }
-      filter.$or = [{ name: re }, { url: re }, { desc: re }, { login: re }, { key: re }, { board: re }]
+      where.push('(' + def.searchCols.map((c) => `${c} like ?`).join(' or ') + ')')
+      params.push(...def.searchCols.map(() => `%${kw}%`))
     }
 
-    const col = db.collection(SITE_COLLECTIONS[coll === 'nav_links' ? 'navLinks' : coll === 'nav_categories' ? 'navCategories' : coll === 'ai_items' ? 'aiItems' : coll === 'ai_boards' ? 'aiBoards' : 'creators'])
-    const total = await col.countDocuments(filter)
-    const rows = await col
-      .find(filter, { projection: { content: 0 } })
-      .sort({ sort: 1, _id: -1 })
-      .limit(limit)
-      .toArray()
+    const total = await sqlFirst<{ n: number }>(
+      `select count(*) as n from ${def.table} where ${where.join(' and ')}`,
+      params
+    )
+    const cols = def.fields.map((f) => f.col).join(', ')
+    const rows = await sqlAll<Record<string, unknown>>(
+      `select ${def.pkAuto ? 'id as __pk, ' : ''}${cols} from ${def.table} where ${where.join(' and ')} order by ${def.orderBy} limit ?`,
+      [...params, limit]
+    )
 
     return {
       ok: true,
       coll,
-      label: ALLOWED[coll].label,
-      total,
+      label: def.label,
+      total: total?.n ?? 0,
       items: rows.map((r) => {
-        const { _id, ...rest } = r as Record<string, unknown> & { _id: unknown }
-        return { id: String(_id), ...rest }
+        const out: Record<string, unknown> = { id: String(r.__pk ?? r[def.pk]) }
+        for (const f of def.fields) {
+          let v = r[f.col]
+          if (f.kind === 'json' && typeof v === 'string') {
+            try {
+              v = JSON.parse(v)
+            } catch {
+              v = []
+            }
+          }
+          out[f.key] = v ?? ''
+        }
+        return out
       })
     }
   }
@@ -117,52 +226,80 @@ export default defineEventHandler(async (event) => {
   /* ---- 新增 ---- */
   if (action === 'create' && method === 'POST') {
     const body = (await readBody(event).catch(() => ({}))) as { coll?: string; doc?: Record<string, unknown> }
-    const coll = String(body?.coll || '') as CollKey
-    if (!ALLOWED[coll]) {
+    const def = TABLES[String(body?.coll || '')]
+    if (!def) {
       setResponseStatus(event, 400)
-      return { ok: false, error: '集合不在白名单内' }
+      return { ok: false, error: '表不在白名单内' }
     }
 
     const doc = body?.doc || {}
-    for (const field of ALLOWED[coll].required) {
-      if (!String(doc[field] ?? '').trim()) {
+    for (const f of def.fields) {
+      if (f.required && !String(doc[f.key] ?? '').trim()) {
         setResponseStatus(event, 400)
-        return { ok: false, error: `缺少必填字段：${field}` }
+        return { ok: false, error: `缺少必填字段：${f.key}` }
       }
     }
 
-    const clean: Record<string, unknown> = { status: 'active', createdAt: new Date() }
-    for (const field of [...ALLOWED[coll].required, ...ALLOWED[coll].extra]) {
-      if (doc[field] !== undefined && doc[field] !== '') clean[field] = doc[field]
+    const cols: string[] = []
+    const marks: string[] = []
+    const params: unknown[] = []
+    for (const f of def.fields) {
+      const raw = doc[f.key]
+      if (raw === undefined || raw === '') continue
+      cols.push(f.col)
+      marks.push('?')
+      if (f.kind === 'int') params.push(Number(raw) || 0)
+      else if (f.kind === 'json') params.push(JSON.stringify(Array.isArray(raw) ? raw : [raw]))
+      else params.push(String(raw))
     }
-    if (typeof clean.sort !== 'number') clean.sort = Number(clean.sort) || 0
-    if (Array.isArray(clean.tags)) clean.tags = clean.tags.map(String)
+    cols.push('updated_at')
+    marks.push('?')
+    params.push(new Date().toISOString())
 
-    const target = db.collection(SITE_COLLECTIONS[coll === 'nav_links' ? 'navLinks' : coll === 'nav_categories' ? 'navCategories' : coll === 'ai_items' ? 'aiItems' : coll === 'ai_boards' ? 'aiBoards' : 'creators'])
-    const res = await target.insertOne(clean)
+    await sqlRun(`insert into ${def.table} (${cols.join(', ')}) values (${marks.join(', ')})`, params)
+
+    // 自增表回读 id（REST 模式拿不到 lastInsertRowid）
+    let id: string | null = null
+    const firstField = def.fields[0]!
+    if (def.pkAuto) {
+      const row = await sqlFirst<Record<string, unknown>>(
+        `select ${def.pk} as pk from ${def.table} where ${firstField.col} = ? order by ${def.pk} desc limit 1`,
+        [doc[firstField.key]]
+      )
+      id = row ? String(row.pk) : null
+    } else {
+      id = String(doc[firstField.key] ?? '')
+    }
+
     invalidateCache('')
-    return { ok: true, id: String(res.insertedId) }
+    return { ok: true, id }
   }
 
   /* ---- 删除 ---- */
   if (action === 'delete' && method === 'POST') {
     const body = (await readBody(event).catch(() => ({}))) as { coll?: string; id?: string }
-    const coll = String(body?.coll || '') as CollKey
-    if (!ALLOWED[coll]) {
+    const def = TABLES[String(body?.coll || '')]
+    if (!def) {
       setResponseStatus(event, 400)
-      return { ok: false, error: '集合不在白名单内' }
+      return { ok: false, error: '表不在白名单内' }
     }
     const id = String(body?.id || '')
-    if (!/^[a-f0-9]{24}$/i.test(id)) {
+    if (!id) {
       setResponseStatus(event, 400)
-      return { ok: false, error: 'id 格式不正确' }
+      return { ok: false, error: '缺少 id' }
     }
 
-    const target = db.collection(SITE_COLLECTIONS[coll === 'nav_links' ? 'navLinks' : coll === 'nav_categories' ? 'navCategories' : coll === 'ai_items' ? 'aiItems' : coll === 'ai_boards' ? 'aiBoards' : 'creators'])
-    const { ObjectId } = await import('mongodb')
-    const res = await target.deleteOne({ _id: new ObjectId(id) })
+    if (def.pkAuto) {
+      if (!/^\d+$/.test(id)) {
+        setResponseStatus(event, 400)
+        return { ok: false, error: 'id 必须是数字' }
+      }
+      await sqlRun(`delete from ${def.table} where ${def.pk} = ?`, [Number(id)])
+    } else {
+      await sqlRun(`delete from ${def.table} where ${def.pk} = ?`, [id])
+    }
     invalidateCache('')
-    return { ok: res.deletedCount === 1, deleted: res.deletedCount }
+    return { ok: true }
   }
 
   setResponseStatus(event, 404)

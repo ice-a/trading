@@ -1,3 +1,4 @@
+import { env } from './env'
 import * as cheerio from 'cheerio'
 import type { ParsedRepo } from './types'
 import { httpFetch } from './http'
@@ -33,7 +34,7 @@ export function toNumber(raw: string | undefined | null): number {
   const cleaned = String(raw).replace(/,/g, '').replace(/\s+/g, '')
   const m = cleaned.match(/([\d.]+)\s*([kmKM]?)/)
   if (!m) return 0
-  let n = Number.parseFloat(m[1])
+  let n = Number.parseFloat(m[1] ?? '')
   if (!Number.isFinite(n)) return 0
   const unit = (m[2] || '').toLowerCase()
   if (unit === 'k') n *= 1_000
@@ -82,8 +83,8 @@ export function parseTrendingHtml(html: string): ParsedRepo[] {
     if (!path || !path.includes('/')) return
     const parts = path.split('/')
     if (parts.length < 2) return
-    const owner = parts[0]
-    const name = parts[1]
+    const owner = parts[0] ?? ''
+    const name = parts[1] ?? ''
     const repoKey = `${owner}/${name}`.toLowerCase()
     if (seen.has(repoKey)) return
     seen.add(repoKey)
@@ -171,7 +172,7 @@ async function fetchViaSearchApi(opts: FetchOptions = {}): Promise<ParsedRepo[]>
     Accept: 'application/vnd.github+json',
     'User-Agent': 'liaowangtai/1.0'
   }
-  const token = process.env.GITHUB_TOKEN
+  const token = env('GITHUB_TOKEN', '')
   if (token) headers.Authorization = `Bearer ${token}`
 
   const res = await httpFetch(url, {

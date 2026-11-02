@@ -3,8 +3,8 @@ import { listNavCategories, listNavLinks } from '../utils/site'
 /**
  * GET /api/nav?catelog=xxx&keyword=yyy
  *
- * 返回导航分类 + 站点。数据全部来自 MongoDB（nav_categories / nav_links），
- * 后台直接往集合里插数据即可生效，不用改代码。
+ * 返回导航分类 + 站点。数据全部来自 SQLite（nav_categories / nav_links），
+ * 后台直接往表里插数据即可生效，不用改代码。
  */
 export default defineEventHandler(async (event) => {
   const q = getQuery(event)

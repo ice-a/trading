@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** /share —— 分享集合页：所有被分享过的卡片都在这里 */
+/** /share —— 分享汇总页：所有被分享过的卡片都在这里 */
 interface ShareItem {
   sid: string
   type: string
@@ -13,7 +13,7 @@ interface ShareItem {
 
 const { data, pending, refresh } = await useCachedData(
   () => 'share:list',
-  () => $fetch<{ total: number; items: ShareItem[] }>(apiUrl('/api/share'), { query: { limit: 60 } }),
+  () => $fetch<{ total: number; items: ShareItem[] }>('/api/share', { query: { limit: 60 } }),
   { ttl: 60_000 }
 )
 

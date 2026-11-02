@@ -38,7 +38,7 @@ const { data, pending, error } = await useAsyncData<DetailResponse>(
   () => 'tutorial:' + currentName(),
   () => {
     const n = currentName()
-    return $fetch<DetailResponse>(apiUrl('/api/ai/detail'), {
+    return $fetch<DetailResponse>('/api/ai/detail', {
       query: { board: 'tutorials', name: n }
     })
   }

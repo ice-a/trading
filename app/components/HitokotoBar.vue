@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 一言卡片：每 60 秒自动换一句，底部细进度条走完即刷新。
- * 刷新间隔可在 .env / nuxt.config 里调（hitokotoRefreshMs）。
+ * 刷新间隔固定 60 秒（组件的 setInterval）。
  */
 interface Quote {
   text: string
@@ -24,7 +24,7 @@ let tickTimer: ReturnType<typeof setInterval> | null = null
 async function load() {
   fading.value = true
   try {
-    const data = await $fetch<Quote>(apiUrl('/api/hitokoto'))
+    const data = await $fetch<Quote>('/api/hitokoto')
     if (data?.text) quote.value = data
   } catch {
     /* 拿不到就保留上一句 */

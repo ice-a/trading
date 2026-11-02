@@ -1,45 +1,57 @@
 import { runCrawl, crawlState } from '../utils/crawler'
 import { collectFeeds } from '../utils/feeds'
-import { pingMongo } from '../utils/mongo'
-import { readMeta } from '../utils/store'
-import { runtimeKind, isServerless, isCloudflareWorkers, shouldRunInternalScheduler } from '../utils/platform'
+import { pingDb } from '../utils/db'
+import { invalidateCache } from '../utils/cache'
+import { appConfig } from '../utils/config'
+import { envFlag } from '../utils/env'
 
 /**
- * 抓取调度（自适应部署形态）。
+ * 抓取调度：进程内定时器（单机常驻进程）。
  *
- * 每个周期并行刷新两批数据：
- *   1. GitHub Trending 日榜（crawl_runs 记录）
- *   2. 60s 聚合接口 50 个端点（feed_snapshots 记录）
- * 频率统一由 UPDATE_INTERVAL_MINUTES 控制。
+ * 这是单机部署真正的收益 —— 不再需要 GitHub Actions / 外部 cron / 触发令牌：
+ *   启动 → 自检数据库 → （可选）立刻抓一次 → 每 N 分钟抓一轮
  *
- * 三种运行方式：
- *  1. 常驻 Node 进程（本地 / VPS / Docker）→ 内置 setInterval
- *  2. Cloudflare Workers → cloudflare:scheduled 钩子（wrangler.toml 的 crons）
- *  3. Vercel / Netlify / Lambda → 外部 cron 调 /api/crawl
+ * 一次刷新并行跑两批数据：
+ *   1. GitHub Trending 日/周/月榜（crawl_runs 记录）
+ *   2. 60s 聚合接口 19 个端点（feed_snapshots 记录）
+ *
+ * 并发保护有两层：
+ *   · 进程内：crawlState().running（同一进程不重入）
+ *   · 数据库：crawl_locks 行锁（多进程 / 残留锁时兜底）
+ *
+ * 环境变量：
+ *   UPDATE_INTERVAL_MINUTES  抓取间隔（默认 60）
+ *   CRAWL_ON_BOOT            启动是否立刻抓一次（默认 true）
+ *   ENABLE_SCHEDULER         置 false 可完全关掉定时器（只用 /api/crawl 手动触发）
  */
 
-const FLAG = '__github_trending_scheduler__'
+const FLAG = '__liaowangtai_scheduler__'
 
 export default defineNitroPlugin((nitroApp) => {
-  const cfg = appConfig()
   const g = globalThis as Record<string, unknown>
-
   if (g[FLAG]) {
     console.log('[scheduler] 已注册，跳过重复初始化')
     return
   }
   g[FLAG] = true
 
-  const kind = runtimeKind()
-  const serverless = isServerless()
-  const useInterval = shouldRunInternalScheduler()
+  const cfg = appConfig()
+  const state = crawlState()
+  const intervalMs = Math.max(cfg.updateIntervalMinutes, 1) * 60_000
+
+  state.intervalMinutes = cfg.updateIntervalMinutes
+  state.startedAt = Date.now()
+  state.nextRunAt = Date.now() + intervalMs
+
+  const enabled = envFlag('ENABLE_SCHEDULER', true)
 
   console.log(
-    `[scheduler] 运行时=${kind} · 无状态=${serverless} · 内置定时器=关（按需触发） · 间隔=${cfg.updateIntervalMinutes} 分钟 · 库=${cfg.mongoDb} · 聚合接口=${cfg.feedsEnabled ? '开' : '关'}`
+    `[scheduler] 间隔 ${cfg.updateIntervalMinutes}min · feeds=${cfg.feedsEnabled ? 'on' : 'off'} · ` +
+      `定时器=${enabled ? 'on' : 'off'} · 启动抓取=${cfg.crawlOnBoot ? 'on' : 'off'}`
   )
 
-  /** 一次完整刷新：GitHub + 聚合接口，互不阻塞 */
   const refreshAll = async (trigger: 'boot' | 'schedule' | 'manual') => {
+    const started = Date.now()
     const [gh, fd] = await Promise.allSettled([
       runCrawl(trigger),
       cfg.feedsEnabled ? collectFeeds() : Promise.resolve(null)
@@ -47,11 +59,12 @@ export default defineNitroPlugin((nitroApp) => {
 
     if (gh.status === 'fulfilled') {
       const o = gh.value
-      if (o.ok) {
+      if (o.skipped) console.log('[crawl] 跳过：已有抓取在跑')
+      else if (o.ok) {
         console.log(
-          `[crawl] ✓ ${o.date} 抓到 ${o.fetched} 个仓库（新增 ${o.upserted} / 更新 ${o.modified} / 掉榜 ${o.dropped}）耗时 ${o.durationMs}ms`
+          `[crawl] ✓ ${o.date} 抓到 ${o.fetched} 个仓库（新增 ${o.upserted} / 更新 ${o.modified} / 掉榜 ${o.dropped}）${o.durationMs}ms`
         )
-      } else if (!o.skipped) {
+      } else {
         console.error(`[crawl] ✗ ${o.error}`)
       }
     } else {
@@ -59,142 +72,47 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (fd.status === 'fulfilled' && fd.value) {
-      const r = fd.value
-      console.log(
-        `[feeds] ${r.failed === 0 ? '✓' : '!'} ${r.total} 个端点：成功 ${r.ok} / 失败 ${r.failed}，耗时 ${r.durationMs}ms`
-      )
+      const f = fd.value
+      console.log(`[feeds] ${f.failed === 0 ? '✓' : '!'} ${f.ok}/${f.total} 成功，${f.durationMs}ms`)
     } else if (fd.status === 'rejected') {
       console.error('[feeds] 未捕获异常:', fd.reason)
     }
 
-    // 抓取会把缓存打失效，这里立刻回填一遍，
-    // 避免「抓完之后第一个访问的用户吃一次 8 秒的冷查询」
-    await warmupCache()
-  }
-
-  /**
-   * 预热接口缓存。
-   *
-   * Atlas 在这里是跨洋链路：建连 ~5.8s、单次读 50 个文档 ~2.3s，
-   * 冷查询对用户来说就是「转圈 8 秒」。预热一次之后所有请求都命中内存缓存。
-   * 只在常驻进程做（Serverless 每次冷启动没法预热，直接用 HTTP 缓存头兜底）。
-   */
-  const warmupCache = async () => {
-    if (!useInterval) return
-    const port = process.env.PORT || process.env.NITRO_PORT || 3000
-    const base = `http://127.0.0.1:${port}`
-    // 预热全部热点：热门榜单各分类 + 三周期榜单 + 各站点页，首次访问即命中磁盘缓存
-    const urls = [
-      '/api/feeds?preview=50',
-      '/api/feeds?category=hot&preview=50',
-      '/api/feeds?category=info&preview=50',
-      '/api/feeds?category=all&preview=50',
-      '/api/trending?page=1',
-      '/api/trending?page=1&period=weekly',
-      '/api/trending?page=1&period=monthly',
-      '/api/history',
-      '/api/history?period=weekly',
-      '/api/history?period=monthly',
-      '/api/nav',
-      '/api/ai',
-      '/api/creators'
-    ]
-    const started = Date.now()
-    await Promise.allSettled(
-      urls.map((u) => fetch(base + u, { signal: AbortSignal.timeout(90_000) }))
+    // 新数据已入库：清掉进程内缓存，避免页面继续吃旧值
+    invalidateCache('')
+    state.nextRunAt = Date.now() + intervalMs
+    console.log(
+      `[scheduler] 本轮完成 ${Date.now() - started}ms，下次 ${new Date(state.nextRunAt).toLocaleString('zh-CN')}`
     )
-    console.log(`[scheduler] 缓存预热完成（${Date.now() - started}ms）`)
   }
 
   const healthCheck = async (): Promise<boolean> => {
-    const ping = await pingMongo()
+    const ping = await pingDb()
     if (!ping.ok) {
-      console.error(`[mongo] 连接失败（库 ${ping.db}）：${ping.error}`)
-      console.error('[mongo] 检查 MONGODB_URI 与 Atlas Network Access 白名单')
+      console.error(`[db] 自检失败：${ping.error}`)
       return false
     }
-    console.log(`[mongo] 已连接 ${ping.db}（${ping.latencyMs}ms）`)
+    console.log(`[db] SQLite 就绪（${ping.latencyMs}ms）· ${ping.path}`)
     return true
   }
 
-  // ---------- Cloudflare Cron ----------
-  if (isCloudflareWorkers()) {
-    try {
-      ;(nitroApp.hooks as unknown as { hook: (name: string, fn: () => unknown) => void }).hook(
-        'cloudflare:scheduled',
-        async () => {
-          const ok = await healthCheck()
-          if (!ok) return
-          await refreshAll('schedule')
-        }
-      )
-      console.log('[scheduler] 已挂载 cloudflare:scheduled 钩子（由 wrangler.toml 的 crons 触发）')
-    } catch (err) {
-      console.warn('[scheduler] 挂载 Cloudflare cron 钩子失败：', err instanceof Error ? err.message : err)
-    }
-  }
+  // 启动自检 + 首轮抓取（不阻塞进程启动）
+  setTimeout(() => {
+    void (async () => {
+      const ok = await healthCheck()
+      if (!ok) return
+      if (cfg.crawlOnBoot) await refreshAll('boot')
+    })()
+  }, 800)
 
-  // ---------- 无状态环境：不做任何全局 I/O ----------
-  if (!useInterval) {
-    console.log(
-      '[scheduler] 当前为无状态环境，进程内定时器已关闭。请用以下任一方式触发：\n' +
-        '  · Vercel：vercel.json 的 crons（GET /api/crawl）\n' +
-        '  · Cloudflare：wrangler.toml 的 [triggers] crons\n' +
-        '  · 通用：.github/workflows/crawl.yml 定时 curl，或任意外部 cron\n' +
-        '  本地想强制开启：ENABLE_INTERNAL_SCHEDULER=true'
-    )
-    // Workers 全局作用域禁止异步 I/O / 定时器，这里绝不能做健康检查
+  if (!enabled) {
+    console.log('[scheduler] 定时器已关闭（ENABLE_SCHEDULER=false），只能通过 /api/crawl 手动抓')
     return
   }
 
-  // ---------- 常驻进程：内置定时器 ----------
-  const intervalMs = Math.max(cfg.updateIntervalMinutes, 1) * 60_000
-  const state = crawlState()
-  state.intervalMinutes = cfg.updateIntervalMinutes
-  state.startedAt = Date.now()
-  state.nextRunAt = Date.now() + intervalMs
-
-  const bootstrap = async () => {
-    const ok = await healthCheck()
-    if (!ok) {
-      console.error('[scheduler] 数据库不可用，抓取将在下一轮重试')
-      return
-    }
-    if (!cfg.crawlOnBoot) {
-      console.log('[scheduler] CRAWL_ON_BOOT=false，跳过启动抓取')
-      await warmupCache()
-      return
-    }
-
-    // dev 热重载 / 容器反复重启时，避免短时间内重复打上游
-    try {
-      const meta = (await readMeta()) as { lastSuccessAt?: string | Date } | null
-      const last = meta?.lastSuccessAt ? new Date(meta.lastSuccessAt).getTime() : 0
-      const gapMinutes = Math.min(5, cfg.updateIntervalMinutes)
-      if (last && Date.now() - last < gapMinutes * 60_000) {
-        console.log(`[scheduler] 距上次成功抓取不足 ${gapMinutes} 分钟，跳过启动抓取`)
-        // 跳过抓取也要预热：否则服务刚起时第一个访问的用户会吃冷查询
-        await warmupCache()
-        return
-      }
-    } catch {
-      /* 读不到就正常抓 */
-    }
-
-    // 启动不再自动抓取：数据由前端调 /api/refresh 按需触发。
-    // 这里只做缓存预热，让首屏直接命中内存/磁盘缓存。
-    // （原来是 await refreshAll('boot')，Serverless 每次冷启动都跑一遍太浪费）
-    await warmupCache()
-  }
-
-  setTimeout(() => void bootstrap(), 300)
-
-  // 定时抓取已关闭：改为按需触发（/api/refresh），
-        // 由前端在「打开页面 / 点刷新 / 每小时轮询」时调用。
-        // 这里保留一个空定时器，只为让下方 close 钩子里的 clearInterval 不报错。
-        const timer = setInterval(() => {}, intervalMs)
-        if (typeof timer.unref === "function") timer.unref()
-        console.log('[scheduler] 定时抓取已关闭，改为按需触发 /api/refresh')
+  const timer = setInterval(() => {
+    void refreshAll('schedule')
+  }, intervalMs)
   if (typeof timer.unref === 'function') timer.unref()
 
   nitroApp.hooks.hook('close', () => {

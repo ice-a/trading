@@ -37,7 +37,7 @@ const router = useRouter()
  */
 const overviewData = useCachedData(
   () => 'history:overview',
-  () => $fetch<HistoryOverview>(apiUrl('/api/history')),
+  () => $fetch<HistoryOverview>('/api/history'),
   { ttl: 120_000 }
 )
 if (import.meta.server) await overviewData
@@ -71,7 +71,7 @@ const page = ref(Math.max(1, Number(route.query.page) || 1))
 const detailData = useCachedData(
   () => `history:detail:${selected.value}:${page.value}`,
   () =>
-    $fetch<TrendingResponse>(apiUrl('/api/trending'), {
+    $fetch<TrendingResponse>('/api/trending', {
       query: { date: selected.value || undefined, page: page.value }
     }),
   { ttl: 60_000 }
@@ -215,7 +215,7 @@ useHead({
     </div>
 
     <footer class="foot">
-      <span>历史数据全部来自 MongoDB，按日期分区留存</span>
+      <span>历史数据全部来自 SQLite，按日期分区留存</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/">返回今日榜单</NuxtLink>
     </footer>

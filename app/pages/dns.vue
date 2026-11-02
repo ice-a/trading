@@ -2,7 +2,7 @@
 /**
  * /dns —— Cloudflare DNS 记录缓存
  *
- * 记录来自 MongoDB（dns_records）。没有 CF Token 也能用：
+ * 记录来自 SQLite（dns_records）。没有 CF Token 也能用：
  * 直接展示库里缓存的状态与延迟，点「探活」会并发请求一次并写回结果。
  */
 
@@ -35,7 +35,7 @@ const showOffline = ref(true)
 
 const { data, pending, error, refresh } = await useCachedData(
   () => 'dns:list',
-  () => $fetch<DnsResponse>(apiUrl('/api/dns')),
+  () => $fetch<DnsResponse>('/api/dns'),
   { ttl: 120_000 }
 )
 
@@ -53,7 +53,7 @@ async function probe() {
   if (probing.value) return
   probing.value = true
   try {
-    await $fetch(apiUrl('/api/dns'), { query: { probe: 1 } })
+    await $fetch('/api/dns', { query: { probe: 1 } })
     clearDataCache('dns:list')
     await refresh()
   } catch {
@@ -158,7 +158,7 @@ useHead({ title: 'Cloudflare DNS · 瞭望台' })
 
     <div v-else class="empty">
       <p>没有可显示的记录</p>
-      <p class="empty-sub">往 dns_records 集合里插入数据即可，或用 seed 脚本生成样例</p>
+      <p class="empty-sub">往 dns_records 表里插入数据即可，或跑 npm run db:seed 生成样例</p>
     </div>
   </div>
 </template>

@@ -1,3 +1,5 @@
+import { env } from '../utils/env'
+
 /**
  * GET /api/repos?user=ice-a&sort=pushed&q=keyword
  *
@@ -33,7 +35,7 @@ export default defineEventHandler(async (event) => {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'github-trending-daily'
     }
-    const token = process.env.GITHUB_TOKEN
+    const token = env('GITHUB_TOKEN', '')
     if (token) headers.Authorization = `Bearer ${token}`
 
     let repos: GithubRepo[] = []

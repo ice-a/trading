@@ -3,7 +3,7 @@ import { listAiBoards, listAiItems } from '../utils/site'
 /**
  * GET /api/ai?board=stations&keyword=xxx
  *
- * AI 资源台：板块（Tab）与条目都来自 MongoDB（ai_boards / ai_items）。
+ * AI 资源台：板块（Tab）与条目都来自 SQLite（ai_boards / ai_items）。
  */
 export default defineEventHandler(async (event) => {
   const q = getQuery(event)

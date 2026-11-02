@@ -123,6 +123,7 @@ export interface TrendingRepoView {
 
 export interface TrendingResponse {
   date: string
+  period?: TrendingPeriod
   humanDate: string
   isToday: boolean
   page: number

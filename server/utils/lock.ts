@@ -1,63 +1,69 @@
-import { randomUUID } from 'node:crypto'
-import { getDb, COLLECTIONS } from './mongo'
+import { sqlFirst, sqlRun } from './db'
 
 /**
- * MongoDB 分布式锁：多实例部署时，同一时刻只允许一个进程去抓 GitHub。
- * TTL 索引会自动清理过期锁；另外对"进程被 kill 留下的僵尸锁"做一次判定：
- * 持有时间超过 staleMs（默认 TTL 的一半）即视为失效，允许接管。
+ * SQLite 抓取锁：多进程 / 多请求并发时，同一时刻只允许一个执行体去抓 GitHub。
+ *
+ * 实现：crawl_locks 表一行一个锁，expires_at 用 ISO 字符串比较；
+ * 对「进程被 kill 留下的僵尸锁」做判定：持有超过 staleMs 即视为失效，允许接管。
+ *
+ * 要点：
+ *   · 用全局 crypto.randomUUID()，不需要额外 import
+ *   · sqlRun 能拿到 changes，但仍用「回读校验」确认 CAS 没被并发改走
  */
 export async function acquireLock(
   name: string,
   ttlMs = 5 * 60_000,
   staleMs = Math.floor(ttlMs / 2)
 ): Promise<string | null> {
-  const db = await getDb()
-  const col = db.collection<{ _id: string; token: string; expiresAt: Date; createdAt: Date }>(
-    COLLECTIONS.locks
-  )
-  const token = randomUUID()
+  const token = crypto.randomUUID()
   const now = new Date()
-  const expiresAt = new Date(Date.now() + ttlMs)
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString()
+  const nowIso = now.toISOString()
 
-  try {
-    await col.insertOne({ _id: name, token, expiresAt, createdAt: now })
-    return token
-  } catch {
-    // 已存在：判断是否过期 / 是否是僵尸锁
-    const current = await col.findOne({ _id: name })
-    if (!current) {
-      // TTL 刚好清掉了，重抢一次
-      try {
-        await col.insertOne({ _id: name, token, expiresAt, createdAt: now })
-        return token
-      } catch {
-        return null
-      }
+  const current = await sqlFirst<{ token: string; expires_at: string; created_at: string }>(
+    'select token, expires_at, created_at from crawl_locks where name = ?',
+    [name]
+  )
+
+  if (!current) {
+    try {
+      await sqlRun('insert into crawl_locks (name, token, expires_at, created_at) values (?, ?, ?, ?)', [
+        name,
+        token,
+        expiresAt,
+        nowIso
+      ])
+      return token
+    } catch {
+      // 并发下别人先插入了
+      return null
     }
+  }
 
-    const expired = current.expiresAt.getTime() <= Date.now()
-    const zombie = Date.now() - current.createdAt.getTime() > staleMs
+  const expired = current.expires_at <= nowIso
+  const zombie = Date.now() - new Date(current.created_at).getTime() > staleMs
 
-    if (expired || zombie) {
-      const res = await col.updateOne(
-        { _id: name, token: current.token },
-        { $set: { token, expiresAt, createdAt: now } }
-      )
-      if (res.modifiedCount === 1) {
-        console.warn(`[lock] 接管失效锁 ${name}（${expired ? '已过期' : '疑似僵尸锁'}）`)
-        return token
-      }
+  if (expired || zombie) {
+    await sqlRun(
+      'update crawl_locks set token = ?, expires_at = ?, created_at = ? where name = ? and token = ?',
+      [token, expiresAt, nowIso, name, current.token]
+    )
+    // sqlRun 拿不到 affected 行数，回读确认
+    const after = await sqlFirst<{ token: string }>('select token from crawl_locks where name = ?', [name])
+    if (after?.token === token) {
+      console.warn(`[lock] 接管失效锁 ${name}（${expired ? '已过期' : '疑似僵尸锁'}）`)
+      return token
     }
     return null
   }
+
+  return null
 }
 
 export async function releaseLock(name: string, token: string): Promise<void> {
   try {
-    const db = await getDb()
-    const col = db.collection(COLLECTIONS.locks)
-    await col.deleteOne({ _id: name as never, token } as never)
+    await sqlRun('delete from crawl_locks where name = ? and token = ?', [name, token])
   } catch {
-    /* ignore */
+    /* 释放失败等 TTL 过期即可 */
   }
 }

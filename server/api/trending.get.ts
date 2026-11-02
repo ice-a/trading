@@ -1,17 +1,17 @@
-import { reposCol } from '../utils/mongo'
+import { getDayRepos } from '../utils/store'
 import { dayKeyOf, isValidDayKey, humanDay, relativeTime } from '../utils/date'
 import { listDays } from '../utils/store'
-import type { Bucket, TrendingRepoDoc, TrendingRepoView, TrendingResponse, TrendingPeriod } from '../utils/types'
+import type { Bucket, TrendingRepoView, TrendingResponse, TrendingPeriod } from '../utils/types'
 
 /**
- * GET /api/trending?date=YYYY-MM-DD&page=1&pageSize=10
+ * GET /api/trending?date=YYYY-MM-DD&page=1&pageSize=10&period=daily
  *
  * - 不传 date → 今日（时区取 APP_TIMEZONE）
  * - 第 1 页只返回今日前 N 名（bucket=0）
  * - 往后的页返回当日榜内剩余 + 已掉榜的保留记录（bucket=1 / bucket=2）
- * - 数据全部来自 MongoDB，前端不直接碰 GitHub
  *
- * 结果做 60 秒内存缓存：榜单每小时才更新，导航/刷新没必要每次都往返 Atlas。
+ * SQLite 版：一天一个周期最多 ~40 行，整取后内存分页，一次查询搞定
+ * （不再需要 Mongo 时代的 $facet 合并技巧）。
  */
 export default defineEventHandler(async (event): Promise<TrendingResponse> => {
   const cfg = appConfig()
@@ -28,7 +28,7 @@ export default defineEventHandler(async (event): Promise<TrendingResponse> => {
     ? (periodRaw as TrendingPeriod)
     : 'daily'
 
-  const rawPageSize = Number(query.pageSize)  
+  const rawPageSize = Number(query.pageSize)
   const pageSize = Math.min(
     Math.max(Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.floor(rawPageSize) : cfg.pageSize, 1),
     50
@@ -38,63 +38,21 @@ export default defineEventHandler(async (event): Promise<TrendingResponse> => {
 
   const payload = await withCache<TrendingResponse>(
     `trending:${date}:${period}:${page}:${pageSize}`,
-    // 数据只在抓取时变化，TTL 略大于抓取间隔；抓取完成后会主动失效
     65 * 60_000,
     async () => {
-      const col = await reposCol()
+      const [docs, days] = await Promise.all([getDayRepos(date, period), listDays(60, period)])
 
-      /**
-       * 一次 $facet 聚合拿到「当前页 + 全量统计 + 最近更新时间」。
-       *
-       * 为什么要合并：原来这里是 7 个并发查询（find / 3×count / find+sort / aggregate），
-       * 在 Cloudflare Workers（workerd）下多路并发 socket 会互相拖死导致请求挂起；
-       * 合并成单次聚合后并发降到 1，Node 下也少了 5 次网络往返。
-       */
-      const [faceted] = await col
-        .aggregate<{
-          items: TrendingRepoDoc[]
-          stats: Array<{ total: number; topCount: number; droppedCount: number; totalTodayStars: number }>
-          latest: Array<{ lastSeenAt: Date }>
-        }>([
-          { $match: { date, period } },
-          {
-            $facet: {
-              items: [
-                // bucket 0 → 1 → 2；桶内先按名次，再按今日增长
-                { $sort: { bucket: 1, rank: 1, todayStars: -1 } },
-                { $skip: (page - 1) * pageSize },
-                { $limit: pageSize },
-                { $project: { snapshots: 0 } }
-              ],
-              stats: [
-                {
-                  $group: {
-                    _id: null,
-                    total: { $sum: 1 },
-                    topCount: { $sum: { $cond: [{ $eq: ['$bucket', 0] }, 1, 0] } },
-                    droppedCount: { $sum: { $cond: ['$dropped', 1, 0] } },
-                    totalTodayStars: { $sum: '$todayStars' }
-                  }
-                }
-              ],
-              latest: [{ $sort: { lastSeenAt: -1 } }, { $limit: 1 }, { $project: { lastSeenAt: 1 } }]
-            }
-          }
-        ])
-        .toArray()
+      const total = docs.length
+      const topCount = docs.filter((d) => d.bucket === 0).length
+      const droppedCount = docs.filter((d) => d.dropped).length
+      const totalTodayStars = docs.reduce((s, d) => s + (d.todayStars || 0), 0)
 
-      const docs = faceted?.items ?? []
-      const stats = faceted?.stats?.[0]
-      const total = stats?.total ?? 0
-      const topCount = stats?.topCount ?? 0
-      const droppedCount = stats?.droppedCount ?? 0
-      const totalTodayStars = stats?.totalTodayStars ?? 0
+      const latest = docs.reduce<number>((max, d) => Math.max(max, d.lastSeenAt?.getTime() ?? 0), 0)
+      const updatedAt = latest ? new Date(latest) : null
 
-      // 日期列表跨天聚合，单独一次（数据量小）
-      const days = await listDays(60, period)
-
-      const updatedAt = faceted?.latest?.[0]?.lastSeenAt ? new Date(faceted.latest[0].lastSeenAt) : null
-      const items: TrendingRepoView[] = docs.map(toView)
+      const items: TrendingRepoView[] = docs
+        .slice((page - 1) * pageSize, page * pageSize)
+        .map(toView)
 
       return {
         date,
@@ -120,7 +78,6 @@ export default defineEventHandler(async (event): Promise<TrendingResponse> => {
     }
   )
 
-  // 空库引导：第一次部署还没抓到数据时给前端一个明确提示
   if (payload.total === 0) {
     setHeader(event, 'X-Trending-Empty', '1')
   }
@@ -128,7 +85,7 @@ export default defineEventHandler(async (event): Promise<TrendingResponse> => {
   return payload
 })
 
-function toView(doc: TrendingRepoDoc): TrendingRepoView {
+function toView(doc: Awaited<ReturnType<typeof getDayRepos>>[number]): TrendingRepoView {
   return {
     rank: doc.rank ?? null,
     owner: doc.owner,

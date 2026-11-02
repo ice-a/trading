@@ -1,8 +1,9 @@
+import { sqlAll, dbInfo } from '../utils/db'
 import { crawlState } from '../utils/crawler'
 import { readMeta } from '../utils/store'
-import { runsCol } from '../utils/mongo'
+import { cacheStats } from '../utils/cache'
 
-/** GET /api/status —— 抓取调度状态、最近若干次运行记录 */
+/** GET /api/status —— 调度状态、数据库信息、最近若干次抓取记录 */
 export default defineEventHandler(async () => {
   const cfg = appConfig()
   const state = crawlState()
@@ -20,28 +21,37 @@ export default defineEventHandler(async () => {
   let meta: Record<string, unknown> | null = null
 
   try {
-    const col = await runsCol()
-    const docs = await col.find({}).sort({ startedAt: -1 }).limit(12).toArray()
-    recent = docs.map((d) => ({
-      startedAt: new Date(d.startedAt).toISOString(),
+    const rows = await sqlAll<{
+      started_at: string
+      date: string
+      ok: number
+      fetched: number
+      dropped: number
+      duration_ms: number
+      triggered_by: string
+      error: string | null
+    }>(
+      'select started_at, date, ok, fetched, dropped, duration_ms, triggered_by, error from crawl_runs order by started_at desc limit 12'
+    )
+    recent = rows.map((d) => ({
+      startedAt: d.started_at,
       date: d.date,
-      ok: d.ok,
+      ok: Boolean(d.ok),
       fetched: d.fetched,
       dropped: d.dropped,
-      durationMs: d.durationMs,
-      trigger: d.trigger,
+      durationMs: d.duration_ms,
+      trigger: d.triggered_by,
       error: d.error
     }))
     meta = (await readMeta()) as Record<string, unknown> | null
   } catch (err) {
-    // 数据库没连上时也返回调度器自身状态
+    // 数据库不可用时也返回调度器自身状态
     meta = { error: err instanceof Error ? err.message : String(err) }
   }
 
   return {
     scheduler: {
       intervalMinutes: cfg.updateIntervalMinutes,
-      cronOnBoot: cfg.crawlOnBoot,
       running: state.running,
       totalRuns: state.totalRuns,
       failStreak: state.failStreak,
@@ -51,11 +61,18 @@ export default defineEventHandler(async () => {
     },
     config: {
       timezone: cfg.timezone,
-      database: cfg.mongoDb,
+      storage: 'sqlite',
       since: cfg.trendingSince,
       language: cfg.trendingLanguage || '(全部)',
       topN: cfg.topN,
-      pageSize: cfg.pageSize
+      pageSize: cfg.pageSize,
+      feedsEnabled: cfg.feedsEnabled
+    },
+    db: dbInfo(),
+    cache: cacheStats(),
+    process: {
+      uptimeSec: Math.round(process.uptime()),
+      rssMB: Math.round(process.memoryUsage().rss / 1_048_576)
     },
     meta,
     recent

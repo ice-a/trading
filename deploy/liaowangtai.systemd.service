@@ -1,0 +1,44 @@
+# ⚠️ 备选方案：本项目默认用 PM2（见 deploy/ecosystem.config.cjs）。
+#    如果已经用 PM2 托管，**不要**再 enable 这个 systemd 单元 —— 两个都会抢 3000 端口。
+#    只有在不想装 PM2 时才用这个文件。
+[Unit]
+Description=Liaowangtai (Nuxt SSR + SQLite)
+Documentation=https://github.com/ice-a/trading
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 改成实际运行用户（需要能写 DB_PATH 所在目录）
+User=www-data
+Group=www-data
+
+WorkingDirectory=/opt/liaowangtai
+Environment=NODE_ENV=production
+# 只监听回环，外部统一走 Caddy
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+Environment=DB_PATH=/opt/liaowangtai/data/app.db
+# 1C1G 友好：把堆限制在 320M，超了让 V8 自己 GC，别把机器拖进 OOM
+Environment=NODE_OPTIONS=--max-old-space-size=320
+
+ExecStart=/usr/bin/env node .output/server/index.mjs
+Restart=always
+RestartSec=5
+# 冷启动要建表/开 WAL，给 30 秒
+TimeoutStartSec=30
+
+# ---- 1C1G 的资源护栏 ----
+MemoryHigh=320M
+MemoryMax=450M
+CPUQuota=90%
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/liaowangtai/data
+
+[Install]
+WantedBy=multi-user.target

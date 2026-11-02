@@ -1,0 +1,41 @@
+# 瞭望台 · Caddy 反代示例
+#
+# 放到 /etc/caddy/Caddyfile（或 sites-enabled/），改掉域名后：
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# 前提：应用监听 127.0.0.1:3000（systemd 里已固定 HOST=127.0.0.1 PORT=3000）。
+# 与 sing-box 共存：Caddy 只占用 80/443，sing-box 用其它端口即可，互不影响。
+
+liaowangtai.example.com {
+	encode zstd gzip
+
+	# 带 hash 的构建产物可以长缓存
+	@immutable path /_nuxt/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	# 页面本身不缓存，避免「日期/更新于几分钟前」停在旧值
+	@pages not path /api/* /_nuxt/*
+	header @pages Cache-Control "no-cache"
+
+	reverse_proxy 127.0.0.1:3000 {
+		# /api/refresh 会同步抓 GitHub + 19 个聚合端点，可能跑 20 秒以上
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+			read_timeout 120s
+			write_timeout 120s
+		}
+		# 让应用拿到真实客户端 IP（日志与限流用得到）
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output file /var/log/caddy/liaowangtai.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+		format console
+	}
+}

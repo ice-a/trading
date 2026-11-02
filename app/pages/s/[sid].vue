@@ -25,7 +25,7 @@ const sid = computed(() => String(route.params.sid || ''))
 
 const { data, error } = await useAsyncData(
   () => `share:${sid.value}`,
-  () => $fetch<ShareBody>(apiUrl(`/api/share/${sid.value}`)),
+  () => $fetch<ShareBody>(`/api/share/${sid.value}`),
   { server: true }
 )
 

@@ -3,7 +3,7 @@ import type { TrendingResponse } from '~~/server/utils/types'
 
 /**
  * 首页：今日榜单（默认）+ 历史日期 + 分页 + 一言。
- * 所有榜单数据都来自 MongoDB（/api/trending），前端不直接访问 GitHub。
+ * 所有榜单数据都来自 SQLite（/api/trending），SSR 直连同源接口，前端不直接访问 GitHub。
  */
 
 const route = useRoute()
@@ -37,7 +37,7 @@ const bundleKey = computed(() => `trending-bundle:${dateParam.value || 'today'}:
 const bundleData = useCachedData<BundleResponse>(
   () => bundleKey.value,
   () =>
-    $fetch<BundleResponse>(apiUrl('/api/trending-bundle'), {
+    $fetch<BundleResponse>('/api/trending-bundle', {
       query: { date: dateParam.value || undefined, pageSize: 10 }
     }),
   { ttl: 300_000 }
@@ -54,7 +54,7 @@ const data = computed<TrendingResponse | null>(() => {
 
 const hitokotoData = useCachedData(
   () => 'hitokoto:first',
-  () => $fetch(apiUrl('/api/hitokoto')),
+  () => $fetch('/api/hitokoto'),
   { ttl: 30_000 }
 )
 if (import.meta.server) await hitokotoData
@@ -71,7 +71,7 @@ function changePeriod(p: Period) {
 /**
  * 只有「日期 / 页码」变化才需要重新取数（换一天、翻页）。
  * 周期切换纯前端切片，URL 用 replaceState 同步即可 —— 走 router.replace 会触发
- * 一次客户端导航，在 Vercel 上还可能重新 SSR，这正是之前「切换很卡」的原因。
+ * 一次客户端导航会重新 SSR 取数，这正是之前「切换很卡」的原因。
  */
 watch([dateParam, page], () => {
   const query: Record<string, string> = {}
@@ -90,44 +90,47 @@ watch(period, (p) => {
 })
 
 /**
- * 按需刷新：不再依赖任何服务端定时任务。
+ * 按需刷新：单机部署后 /api/refresh 是同步抓取 —— 请求返回就代表数据已经是新的。
  *
- *   · 打开页面 → 调一次 /api/refresh（服务端有 1 小时节流，到点才会真的抓）
- *   · 页面停留 → 每 1 小时自动调一次
- *   · 点「刷新」按钮 → /api/refresh?force=1 立即抓
+ *   · 打开页面  → 调一次（服务端 1 小时节流，不到点直接返回 crawled:false）
+ *   · 页面停留  → 每 1 小时自动调一次
+ *   · 点「刷新」→ /api/refresh?force=1 立即抓
  *
- * 抓取是「先返回、再慢慢抓」不现实（Serverless 会在请求结束后杀进程），
- * 所以这里串行：先抓 GitHub 榜单（快），再依次抓 feeds 的 3 个分片（每片 6 个端点）。
+ * 抓取耗时 4~20 秒，所以客户端超时放宽到 120 秒（与 Caddy 反代超时一致）。
+ * 服务端抓完会清进程内缓存，这里拿到响应后重新取数即可。
  */
 const refreshing = ref(false)
+const refreshNote = ref('')
+
+async function reloadFromApi() {
+  clearDataCache('trending-bundle')
+  clearDataCache('feeds:')
+  await refresh()
+}
 
 async function pullRefresh(force = false) {
   if (refreshing.value) return
   refreshing.value = true
+  refreshNote.value = ''
   try {
-    // 1) GitHub 日/周/月榜
-    const r = await $fetch<{ crawled?: boolean }>(apiUrl('/api/refresh'), {
+    interface RefreshResult {
+      crawled?: boolean
+      target?: string
+      error?: string
+    }
+    const r: RefreshResult = await $fetch<RefreshResult>('/api/refresh', {
       method: 'POST',
       query: force ? { force: 1 } : {},
-      timeout: 25000
-    }).catch(() => null)
-
-    // 2) 需要抓 feeds 时，分片串行跑完（每片 6 个端点，避免单次函数超时）
-    if (r?.crawled) {
-      for (let shard = 0; shard < 4; shard++) {
-        const res = await $fetch<{ nextShard?: number }>(apiUrl('/api/refresh'), {
-          method: 'POST',
-          query: { target: 'feeds', shard, force: 1 },
-          timeout: 25000
-        }).catch(() => null)
-        if (!res || res.nextShard === -1) break
-      }
-    }
+      timeout: 120_000
+    }).catch((e) => ({ error: String(e?.message || e) } as RefreshResult))
 
     if (r?.crawled) {
-      clearDataCache('trending-bundle')
-      await refresh()
+      await reloadFromApi()
+      refreshNote.value = '数据已更新'
+      setTimeout(() => (refreshNote.value = ''), 4000)
+      return
     }
+    if (r?.error) refreshNote.value = r.error
   } finally {
     refreshing.value = false
   }
@@ -137,7 +140,7 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
   try {
-    const status = await $fetch<{ scheduler: { intervalMinutes: number } }>(apiUrl('/api/status'))
+    const status = await $fetch<{ scheduler: { intervalMinutes: number } }>('/api/status')
     intervalMinutes.value = status?.scheduler?.intervalMinutes ?? 60
   } catch {
     /* 忽略 */
@@ -306,7 +309,12 @@ useHead({
           回到今天
         </button>
 
-        <button class="pill-btn ghost" :class="{ spinning: pending }" @click="manualRefresh">
+        <button
+          class="pill-btn ghost"
+          :class="{ spinning: refreshing || pending }"
+          :disabled="refreshing"
+          @click="manualRefresh"
+        >
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
             <path
               fill="currentColor"
@@ -314,8 +322,10 @@ useHead({
             />
             <path fill="currentColor" d="M8 .5 11 3 8 5.5v-5Z" />
           </svg>
-          刷新
+          {{ refreshing ? '抓取中…' : '刷新' }}
         </button>
+
+        <span v-if="refreshNote" class="refresh-note">{{ refreshNote }}</span>
       </div>
 
       <div class="tb-right">
@@ -359,7 +369,7 @@ useHead({
     />
 
     <footer class="foot">
-      <span>数据每小时写入 MongoDB（按日期分区，掉出前 10 的记录只降级、不删除）</span>
+      <span>数据每小时写入 SQLite（按日期分区，掉出前 10 的记录只降级、不删除）</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/history">查看历史榜单</NuxtLink>
       <span class="dot-sep">·</span>
@@ -582,6 +592,17 @@ h1 {
   border-color: #b9cdee;
   color: var(--brand);
   background: #f7fbff;
+}
+
+.refresh-note {
+  font-size: 11.5px;
+  color: #7b8999;
+  white-space: nowrap;
+}
+
+.pill-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 
 .pill-btn.spinning svg {

@@ -107,7 +107,7 @@ async function doSearch() {
     const headers: Record<string, string> = {}
     if (ghToken.value.trim()) headers['x-github-token'] = ghToken.value.trim()
 
-    searchResult.value = await $fetch<SearchResult>(apiUrl('/api/github-search'), {
+    searchResult.value = await $fetch<SearchResult>('/api/github-search', {
       query: { q: kw },
       headers
     })
@@ -149,7 +149,7 @@ onMounted(() => {
 const reposData = useCachedData(
   () => `repos:${currentUser.value}:${sortBy.value}`,
   () =>
-    $fetch<ReposResponse>(apiUrl('/api/repos'), {
+    $fetch<ReposResponse>('/api/repos', {
       query: { user: currentUser.value, sort: sortBy.value }
     }),
   { ttl: 600_000 }

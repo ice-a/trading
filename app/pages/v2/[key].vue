@@ -34,12 +34,19 @@ interface FeedDetail {
 }
 
 const route = useRoute()
+const router = useRouter()
 const key = computed(() => String(route.params.key || ''))
+
+/** 「上一级」按钮：有历史就真后退，直接落地进详情页时回 /v2 */
+function goBack() {
+  if (import.meta.client && window.history.length > 1) router.back()
+  else void navigateTo('/v2')
+}
 
 // 只在 SSR 阶段 await（客户端不阻塞，避免 async 页面组件在 Suspense 里不销毁旧页面）
 const feedData = useCachedData(
   () => `feed:${key.value}`,
-  () => $fetch<FeedDetail>(apiUrl(`/api/feeds/${key.value}`)),
+  () => $fetch<FeedDetail>(`/api/feeds/${key.value}`),
   { ttl: 600_000 }
 )
 if (import.meta.server) await feedData
