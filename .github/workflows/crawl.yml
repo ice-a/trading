@@ -1,0 +1,64 @@
+name: crawl
+
+# 每小时触发一次 Vercel 上的抓取。
+# Vercel Hobby 的 cron 每天只能跑一次，一天一抓会漏掉整天的变化。
+#
+# 需要的仓库配置（Settings → Secrets and variables → Actions）：
+#   Variables: APP_URL      = https://<你的 vercel 域名>
+#   Secrets:   CRON_TOKEN   = 与 Vercel 环境变量里的 CRON_SECRET 一致
+
+on:
+  schedule:
+    - cron: '5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检查配置
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::缺少仓库变量 APP_URL"
+            exit 1
+          fi
+          if [ -z "$CRON_TOKEN" ]; then
+            echo "::error::缺少仓库密钥 CRON_TOKEN"
+            exit 1
+          fi
+
+      - name: 触发抓取
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+        run: |
+          set -o pipefail
+          echo "→ POST $APP_URL/api/crawl"
+          body=$(curl -fsS --max-time 120 -X POST \
+            "$APP_URL/api/crawl?token=$CRON_TOKEN" \
+            -H "Authorization: Bearer $CRON_TOKEN" || true)
+          echo "$body"
+
+          if echo "$body" | grep -q '"ok":true'; then
+            echo "::notice::抓取成功"
+            exit 0
+          fi
+          if echo "$body" | grep -q '"skipped":true'; then
+            echo "::notice::已有抓取在跑，本次跳过"
+            exit 0
+          fi
+
+          echo "::error::抓取失败"
+          exit 1
