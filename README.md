@@ -108,6 +108,7 @@ npm run build && npm start
 | `npm run db:reset` | 删库重建（`FORCE=1` 确认） |
 | `npm run db:shell` | 打印常用 SQL（配合 `sqlite3` CLI） |
 | `npm run crawl` | 手动抓一次（服务需在运行） |
+| `./scripts/publish-dist.sh` | 构建并推送产物到 `dist` 分支 |
 | `npm run verify:sql` | 校验 schema / seed / 关键 SQL（不需要数据库） |
 | `npm run typecheck` | server(tsc) + app(vue-tsc) 全量类型检查 |
 
@@ -285,6 +286,31 @@ node scripts/backup-db.mjs          # VACUUM INTO，抓取中也能备份
 # crontab：每天 4 点，保留 7 份
 0 4 * * * cd /opt/liaowangtai && /usr/bin/node scripts/backup-db.mjs >> data/backup.log 2>&1
 ```
+
+### 7.5 另一条路：服务器纯 git 部署（dist 分支）
+
+不想用 rsync？仓库里有一个 **`dist` 分支**，只放构建产物（约 8MB，自包含依赖）。
+服务器 clone 它就能直接跑，全程不碰 npm：
+
+```bash
+# 首次
+git clone -b dist https://github.com/ice-a/trading.git /opt/liaowangtai
+cd /opt/liaowangtai
+cp .env.example .env
+node scripts/db-cli.mjs init && node scripts/db-cli.mjs seed
+pm2 start deploy/ecosystem.config.cjs && pm2 save && pm2 startup
+
+# 之后每次更新（服务器上执行）
+./update.sh          # git fetch dist → reset --hard → pm2 restart → 健康检查
+```
+
+发新版时在本地跑：
+
+```bash
+./scripts/publish-dist.sh     # 构建 + 强制推送 dist 分支
+```
+
+`data/` 与 `.env` 在 dist 分支的 `.gitignore` 里，`reset --hard` 不会覆盖你的数据库。
 
 ### 8. 更新版本
 
