@@ -6,15 +6,10 @@ const route = useRoute()
 
 const items = [
   { to: '/', label: 'GitHub 日榜', icon: '📈' },
-  { to: '/v2', label: '热门榜单', icon: '🔥' },
-  { to: '/nav', label: '网站导航', icon: '🧭' },
-  { to: '/ai', label: 'AI 资源台', icon: '🤖' },
   { to: '/github', label: 'GitHub', icon: '🐙' },
   { to: '/avatar', label: '个性头像', icon: '🎨' },
   { to: '/dns', label: 'Cloudflare DNS', icon: '🌐' },
-  { to: '/share', label: '分享', icon: '🔗' },
-  { to: '/history', label: '历史', icon: '🗓️' },
-  { to: '/admin', label: '后台', icon: '⚙️' }
+  { to: '/history', label: '历史', icon: '🗓️' }
 ]
 
 const isActive = (to: string) => {

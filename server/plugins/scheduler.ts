@@ -1,44 +1,41 @@
 import { runCrawl, crawlState } from '../utils/crawler'
-import { collectFeeds } from '../utils/feeds'
 import { pingDb } from '../utils/db'
 import { invalidateCache } from '../utils/cache'
 import { appConfig } from '../utils/config'
 import { envFlag } from '../utils/env'
 
 /**
- * 抓取调度：进程内定时器（单机常驻进程）。
+ * 抓取调度（自建 / 常驻进程环境）。
  *
- * 这是单机部署真正的收益 —— 不再需要 GitHub Actions / 外部 cron / 触发令牌：
- *   启动 → 自检数据库 → （可选）立刻抓一次 → 每 N 分钟抓一轮
+ * 功能裁剪后只需抓 GitHub Trending 三榜（一次请求全拿）。
  *
- * 一次刷新并行跑两批数据：
- *   1. GitHub Trending 日/周/月榜（crawl_runs 记录）
- *   2. 60s 聚合接口 19 个端点（feed_snapshots 记录）
+ * 环境差异：
+ *   · 自建 Node（pm2 / systemd）：进程内 setInterval，启动抓一轮 + 每 N 分钟
+ *   · Vercel 等 serverless：**没有常驻进程**，这里直接跳过，
+ *     抓取由 vercel.json 的 Cron（Hobby 每天 1 次）或外部 cron 打 /api/crawl 完成
  *
- * 并发保护有两层：
- *   · 进程内：crawlState().running（同一进程不重入）
- *   · 数据库：crawl_locks 行锁（多进程 / 残留锁时兜底）
- *
- * 环境变量：
- *   UPDATE_INTERVAL_MINUTES  抓取间隔（默认 60）
- *   CRAWL_ON_BOOT            启动是否立刻抓一次（默认 true）
- *   ENABLE_SCHEDULER         置 false 可完全关掉定时器（只用 /api/crawl 手动触发）
+ * 并发保护：进程内 crawlState().running + 数据库 crawl_locks 行锁。
  */
 
 const FLAG = '__liaowangtai_scheduler__'
 
 export default defineNitroPlugin((nitroApp) => {
   const g = globalThis as Record<string, unknown>
-  if (g[FLAG]) {
-    console.log('[scheduler] 已注册，跳过重复初始化')
-    return
-  }
+  if (g[FLAG]) return
   g[FLAG] = true
 
   const cfg = appConfig()
+
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    console.log(
+      '[scheduler] serverless 环境：不启用进程内定时器。抓取由 vercel.json 的 cron（Hobby 每天 1 次）' +
+        '或外部 cron 打 /api/crawl 完成；想要小时级更新请用 cron-job.org / GitHub Actions。'
+    )
+    return
+  }
+
   const state = crawlState()
   const intervalMs = Math.max(cfg.updateIntervalMinutes, 1) * 60_000
-
   state.intervalMinutes = cfg.updateIntervalMinutes
   state.startedAt = Date.now()
   state.nextRunAt = Date.now() + intervalMs
@@ -46,19 +43,13 @@ export default defineNitroPlugin((nitroApp) => {
   const enabled = envFlag('ENABLE_SCHEDULER', true)
 
   console.log(
-    `[scheduler] 间隔 ${cfg.updateIntervalMinutes}min · feeds=${cfg.feedsEnabled ? 'on' : 'off'} · ` +
-      `定时器=${enabled ? 'on' : 'off'} · 启动抓取=${cfg.crawlOnBoot ? 'on' : 'off'}`
+    `[scheduler] 间隔 ${cfg.updateIntervalMinutes}min · 定时器=${enabled ? 'on' : 'off'} · 启动抓取=${cfg.crawlOnBoot ? 'on' : 'off'}`
   )
 
-  const refreshAll = async (trigger: 'boot' | 'schedule' | 'manual') => {
+  const runOnce = async (trigger: 'boot' | 'schedule' | 'manual') => {
     const started = Date.now()
-    const [gh, fd] = await Promise.allSettled([
-      runCrawl(trigger),
-      cfg.feedsEnabled ? collectFeeds() : Promise.resolve(null)
-    ])
-
-    if (gh.status === 'fulfilled') {
-      const o = gh.value
+    try {
+      const o = await runCrawl(trigger)
       if (o.skipped) console.log('[crawl] 跳过：已有抓取在跑')
       else if (o.ok) {
         console.log(
@@ -67,18 +58,10 @@ export default defineNitroPlugin((nitroApp) => {
       } else {
         console.error(`[crawl] ✗ ${o.error}`)
       }
-    } else {
-      console.error('[crawl] 未捕获异常:', gh.reason)
+    } catch (err) {
+      console.error('[crawl] 未捕获异常:', err)
     }
-
-    if (fd.status === 'fulfilled' && fd.value) {
-      const f = fd.value
-      console.log(`[feeds] ${f.failed === 0 ? '✓' : '!'} ${f.ok}/${f.total} 成功，${f.durationMs}ms`)
-    } else if (fd.status === 'rejected') {
-      console.error('[feeds] 未捕获异常:', fd.reason)
-    }
-
-    // 新数据已入库：清掉进程内缓存，避免页面继续吃旧值
+    // 新数据已入库：清掉进程内缓存
     invalidateCache('')
     state.nextRunAt = Date.now() + intervalMs
     console.log(
@@ -89,19 +72,17 @@ export default defineNitroPlugin((nitroApp) => {
   const healthCheck = async (): Promise<boolean> => {
     const ping = await pingDb()
     if (!ping.ok) {
-      console.error(`[db] 自检失败：${ping.error}`)
+      console.error(`[db] 自检失败（${ping.mode}）：${ping.error}`)
       return false
     }
-    console.log(`[db] SQLite 就绪（${ping.latencyMs}ms）· ${ping.path}`)
+    console.log(`[db] 就绪（${ping.mode}，${ping.latencyMs}ms）`)
     return true
   }
 
-  // 启动自检 + 首轮抓取（不阻塞进程启动）
   setTimeout(() => {
     void (async () => {
-      const ok = await healthCheck()
-      if (!ok) return
-      if (cfg.crawlOnBoot) await refreshAll('boot')
+      if (!(await healthCheck())) return
+      if (cfg.crawlOnBoot) await runOnce('boot')
     })()
   }, 800)
 
@@ -110,9 +91,7 @@ export default defineNitroPlugin((nitroApp) => {
     return
   }
 
-  const timer = setInterval(() => {
-    void refreshAll('schedule')
-  }, intervalMs)
+  const timer = setInterval(() => void runOnce('schedule'), intervalMs)
   if (typeof timer.unref === 'function') timer.unref()
 
   nitroApp.hooks.hook('close', () => {

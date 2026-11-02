@@ -1,13 +1,12 @@
 import { runCrawl } from '../utils/crawler'
-import { collectFeeds } from '../utils/feeds'
 import { appConfig } from '../utils/config'
 import { invalidateCache } from '../utils/cache'
 
 /**
  * /api/crawl —— 强制抓取一次（运维 / 外部 cron / 手动）。
  *
- * 单机部署后没有平台差异：这台机器上直接抓，抓完写 SQLite。
- * 想用系统 cron 代替内置定时器时，只要 `ENABLE_SCHEDULER=false` 再让 cron 打这个接口。
+ * 功能裁剪后只抓 GitHub Trending（日/周/月三榜一次抓完），
+ * 60s 聚合端点那部分已随 /v2 页面一起删除。
  *
  * 鉴权（满足任一即可；CRON_TOKEN 未配置时不校验，仅适合本机调试）：
  *   Authorization: Bearer <CRON_TOKEN>
@@ -35,28 +34,15 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const targetRaw = String(query.target || 'all')
-  const target = (['github', 'feeds', 'all'].includes(targetRaw) ? targetRaw : 'all') as
-    | 'github'
-    | 'feeds'
-    | 'all'
-
   const startedAt = Date.now()
-  const [github, feeds] = await Promise.all([
-    target === 'feeds' ? Promise.resolve(null) : runCrawl('manual'),
-    target === 'github' || !cfg.feedsEnabled ? Promise.resolve(null) : collectFeeds()
-  ])
-
+  const github = await runCrawl('manual')
   invalidateCache('')
 
-  const ok = (github?.ok ?? true) && (feeds ? feeds.failed < feeds.total : true)
-  setResponseStatus(event, ok ? 200 : github?.skipped ? 429 : 500)
+  setResponseStatus(event, github.ok ? 200 : github.skipped ? 429 : 500)
 
   return {
-    ok,
+    ok: github.ok,
     wallMs: Date.now() - startedAt,
-    github,
-    feeds,
-    target
+    github
   }
 })

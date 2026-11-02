@@ -2,8 +2,8 @@
   "name": "liaowangtai",
   "private": true,
   "type": "module",
-  "version": "3.0.0",
-  "description": "GitHub Trending 日榜简报 · Nuxt 全栈单进程 + 本地 SQLite",
+  "version": "4.0.0",
+  "description": "GitHub Trending 日榜简报 · Nuxt 全栈 + SQLite/libSQL（Vercel 或单机）",
   "engines": {
     "node": ">=22.5.0"
   },
@@ -20,9 +20,11 @@
     "crawl": "node scripts/crawl-once.mjs",
     "typecheck": "nuxt prepare && tsc -p .nuxt/tsconfig.server.json --noEmit && vue-tsc -p .nuxt/tsconfig.app.json --noEmit",
     "verify:sql": "node scripts/verify-sql.mjs",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "publish-dist": "bash scripts/publish-dist.sh"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "cheerio": "^1.0.0",
     "markdown-it": "^15.0.3",
     "nuxt": "^4.0.0",

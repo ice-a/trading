@@ -65,8 +65,7 @@ export default defineEventHandler(async () => {
       since: cfg.trendingSince,
       language: cfg.trendingLanguage || '(全部)',
       topN: cfg.topN,
-      pageSize: cfg.pageSize,
-      feedsEnabled: cfg.feedsEnabled
+      pageSize: cfg.pageSize
     },
     db: dbInfo(),
     cache: cacheStats(),

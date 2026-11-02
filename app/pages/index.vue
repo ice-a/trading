@@ -104,7 +104,6 @@ const refreshNote = ref('')
 
 async function reloadFromApi() {
   clearDataCache('trending-bundle')
-  clearDataCache('feeds:')
   await refresh()
 }
 

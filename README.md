@@ -1,54 +1,30 @@
 # 瞭望台 · GitHub 日榜简报
 
-> 一个自用的信息聚合站点：GitHub Trending 日/周/月榜 + 19 个热门数据源 + 网站导航 / AI 资源台 / 个性头像 / DNS 看板。
+> GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + Cloudflare DNS 看板 + 历史榜单。
 
-**一个 Nuxt 全栈应用，一个 Node 进程，一个 SQLite 文件。** 页面与 `/api/*` 编译进同一份产物、同源部署；数据落本地单文件，Caddy 反代 127.0.0.1:3000。没有 Cloudflare、没有 MongoDB、没有 GitHub Actions、没有外部定时服务。
+**一个 Nuxt 全栈应用，两种部署形态共用同一份代码：**
 
-实测资源占用（Windows 开发机 / 等价 Linux 容器）：
+| 形态 | 运行时 | 数据库 | 定时抓取 |
+| --- | --- | --- | --- |
+| **Vercel（免费 Hobby）** | Serverless Functions | 远程 libSQL（Turso） | Vercel Cron 每天 1 次，或外部 cron 打 `/api/crawl` |
+| **自建 1C1G** | Node 常驻进程（pm2） | 本地 SQLite 单文件 | 进程内定时器，启动抓一轮 + 每小时 |
 
-| 指标 | 数值 |
-| --- | --- |
-| 常驻内存 RSS | **84 ~ 96 MB** |
-| 构建产物 | 5.3 MB（`.output`） |
-| 数据库 | 135 KB（含 17 条榜单 + 19 个端点快照） |
-| 冷启动到可用 | < 1 秒 |
-| 一次抓取耗时 | GitHub 4.1s / 聚合端点 18.6s |
-
-1 核 1G 的机器跑得动，但**构建必须放在本地**（`nuxt build` 峰值 1.2~1.8GB，服务器上会 OOM）。
+数据层是同一套接口（`sqlAll` / `sqlFirst` / `sqlRun` / `sqlBatch`），
+**配了 `TURSO_DATABASE_URL` 就走远程，否则走本地文件** —— 业务代码一行都不用改。
 
 ---
 
 ## 功能
 
-### 1. GitHub 榜单（`/`）
-
-- 每天抓取 GitHub Trending **日榜 / 周榜 / 月榜**，一键切换
-- 按日期分区存储，**每小时自动更新**；掉出前 10 的记录只降级、不删除
-- 首页默认展示今日前 10，翻页可看当日剩余 + 历史掉榜仓库
-- 附带一言（每 60 秒自动刷新）
-
-### 2. 热门榜单（`/v2`）
-
-**19 个数据源**，分 2 类：
-
-- 🔥 **热搜榜**（9）：微博 / 知乎 / 抖音 / B站 / 头条 / 百度 / 贴吧 / 小红书 / 夸克
-- 📰 **资讯速览**（10）：AI 资讯 / IT 资讯 / IT 榜 / HN 热门·最新·最佳 / 历史上的今天 / 网易云榜 / 60 秒读懂世界 / 必应壁纸
-
-一屏 **3 × 3 共 9 张卡片**，每张卡片最多展示 50 条，卡片内滚动看完，不用点进详情。
-上游来自 [60s API](https://60.020417.xyz)，同样每小时更新。
-
-### 3. 站点板块
-
-| 路由 | 说明 | 数据表 |
+| 路由 | 说明 | 数据来源 |
 | --- | --- | --- |
-| `/nav` | 网站导航：左侧分类侧栏 + 站点卡片，支持搜索 | `nav_categories` / `nav_links` |
-| `/ai` | AI 资源台：6 个板块 Tab + 资源卡片，教程可点开看 markdown 全文 | `ai_boards` / `ai_items` |
-| `/github` | 查任意 GitHub 用户的公开仓库，可搜索、按推送时间/Star 排序 | GitHub 公开 API |
-| `/avatar` | 个性头像生成器：seed 可复现、4 种风格、导出 1024px PNG | 纯前端 SVG |
-| `/dns` | Cloudflare DNS 看板：记录缓存 + 在线状态与延迟，可手动探活 | `dns_records` + CF API |
-| `/share` | 分享汇总：任意卡片点「分享」生成的页面汇总于此 | `shares` |
-| `/admin` | 数据后台：统计 / 列表 / 新增 / 删除（密码保护） | 全部表 |
-| `/history` | 历史榜单：日期时间线 + 当日完整榜单，支持日/周/月切换 | `trending_repos` |
+| `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `trending_repos` |
+| `/github` | 查任意 GitHub 用户的公开仓库 | GitHub 公开 API |
+| `/avatar` | 个性头像生成器（seed 可复现、4 种风格、导出 PNG） | 纯前端 SVG |
+| `/dns` | Cloudflare DNS 看板（记录 + 在线探测延迟） | `dns_records` + CF API |
+| `/history` | 历史榜单时间线 + 当日完整榜单 | `trending_repos` |
+
+> 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）。
 
 ---
 
@@ -56,329 +32,212 @@
 
 | 层 | 选型 |
 | --- | --- |
-| 框架 | **Nuxt 4**（Vue 3 SSR + Nitro server API），前后端同一份代码 |
-| 运行时 | **Node 单进程**（`node-server` preset，`node .output/server/index.mjs`） |
-| 数据库 | **SQLite 单文件**，走 Node 内置 `node:sqlite`（零外部依赖） |
-| 缓存 | 进程内 Map + TTL（300 条上限） |
-| 定时 | 进程内 `setInterval`（启动即抓一轮，之后每 60 分钟） |
-| 反代 | **Caddy**（zstd/gzip + 静态资源长缓存） |
-| 守护 | **systemd**（`MemoryMax=450M`、失败自动重启） |
-
-### 为什么是 SQLite 而不是 JSON
-
-业务是关系型查询：按 `date + period` 过滤、按 `bucket/rank/stars` 排序、翻页、`union all` 统计、主键 upsert 去重。
-JSON 方案每条都要全量 parse 进内存再排序，历史榜单攒几个月后就是 CPU 与 GC 灾难。
-SQLite 是单文件 + 索引 + WAL（写不阻塞读），查询走索引直接出结果，磁盘占用也就百 KB 级。
-
-### 为什么用 `node:sqlite` 而不是 `better-sqlite3`
-
-`better-sqlite3` 要 node-gyp 编译，1C1G 上装一次要装 python/gcc、编译很久。
-`node:sqlite` 是 Node 内置模块：**零编译、零依赖**，`npm ci` 秒装。
-
-要求 Node ≥ 22.5（22.x 需 `--experimental-sqlite`，23+ 默认可用；推荐 22 LTS 以上）。
+| 框架 | Nuxt 4（Vue 3 SSR + Nitro server API） |
+| 数据库 | SQLite 语法：本地用 `node:sqlite`，远程用 `@libsql/client`（Turso） |
+| 缓存 | 进程内 Map + TTL |
+| 抓取 | `cheerio` 解析 GitHub Trending HTML |
+| 部署 | Vercel（`vercel` preset）或 Node（`node-server` preset） |
 
 ---
 
-## 快速开始
+## 本地开发
 
 ```bash
 npm install
-
-npm run db:init          # 建表（幂等）
-npm run db:seed          # 可选：导航 / AI / 关注列表种子
-
-npm run dev              # 开发：http://localhost:3000（HMR）
-# 或
-npm run build && npm start
+npm run db:init        # 建表（默认写 data/app.db）
+npm run dev            # http://localhost:3000
 ```
 
-首次启动后，`server/plugins/scheduler.ts` 会在 0.8 秒后自检数据库并抓一轮
-（`CRAWL_ON_BOOT=false` 可关闭）。
+首次启动会自检数据库并抓一轮榜单（`CRAWL_ON_BOOT=false` 可关）。
 
 ### 常用命令
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run dev` | 开发模式（热更新） |
-| `npm run build` | 构建 `.output`（**本地/CI 执行，别在 1G 机器上跑**） |
-| `npm start` | 启动生产服务 |
-| `npm run db:init` | 建表（幂等） |
-| `npm run db:seed` | 灌种子数据（幂等） |
-| `npm run db:info` | 表行数 / 文件大小 / WAL 状态 |
-| `npm run db:reset` | 删库重建（`FORCE=1` 确认） |
-| `npm run db:shell` | 打印常用 SQL（配合 `sqlite3` CLI） |
+| `npm run dev` | 开发（热更新） |
+| `npm run build` | 构建（Vercel 上设 `VERCEL=1` 切 preset） |
+| `npm run start` | 本地跑生产产物 |
+| `npm run db:init` | 建表（幂等；远程库同样适用） |
+| `npm run db:seed` | 灌示例数据（幂等） |
+| `npm run db:info` | 表行数 / 文件大小 / 连接模式 |
+| `npm run db:reset` | 删库重建（`FORCE=1` 确认，仅本地） |
 | `npm run crawl` | 手动抓一次（服务需在运行） |
-| `./scripts/publish-dist.sh` | 构建并推送产物到 `dist` 分支 |
-| `npm run verify:sql` | 校验 schema / seed / 关键 SQL（不需要数据库） |
-| `npm run typecheck` | server(tsc) + app(vue-tsc) 全量类型检查 |
+| `npm run verify:sql` | 校验 schema / seed / 关键 SQL |
+| `npm run typecheck` | server(tsc) + app(vue-tsc) |
 
 ---
 
-## 环境变量
+## 部署到 Vercel（免费）
 
-复制 `.env.example` 为 `.env`，或直接用 systemd 的 `Environment=` 注入。
+### 1. 建远程库（Turso，免费 500MB）
+
+Vercel 的函数**没有持久磁盘**，`/tmp` 不跨实例，SQLite 文件写不了 —— 所以必须用远程库。
+Turso 是 libSQL（SQLite 分支），schema 完全不用改。
 
 ```bash
-# ── 进程 ──
-HOST=127.0.0.1          # 只监听回环，外部统一走 Caddy
-PORT=3000
-DB_PATH=data/app.db
+curl -sSfL https://get.tur.so/install.sh | bash
 
-# ── 抓取调度（进程内，不需要 cron / Actions）──
-UPDATE_INTERVAL_MINUTES=60
-CRAWL_ON_BOOT=true
-ENABLE_SCHEDULER=true
+turso auth signup                    # 或 turso auth login
+turso db create liaowangtai
+turso db show liaowangtai --url      # 记下 libsql://...
+turso db tokens create liaowangtai   # 记下 token
+```
 
-# ── 展示参数 ──
-TRENDING_SINCE=daily
-TRENDING_LANGUAGE=
-TOP_N=10
-PAGE_SIZE=10
-APP_TIMEZONE=Asia/Shanghai
-HITOKOTO_ENDPOINT=https://v1.hitokoto.cn/
+建表（本地执行，指向远程库）：
 
-# ── 60s 聚合接口 ──
-FEEDS_BASE=https://60.020417.xyz
-FEEDS_ENABLED=true
+```bash
+export TURSO_DATABASE_URL="libsql://xxxx.turso.io"
+export TURSO_AUTH_TOKEN="ey..."
+npm run db:init
+npm run db:seed      # 可选
+```
 
-# ── 可选 ──
-CRON_TOKEN=             # /api/crawl 鉴权；不配则不校验
-ADMIN_PASSWORD=         # /admin 后台密码
-GITHUB_TOKEN=           # 提高 GitHub API 配额
-CF_API_TOKEN=           # /dns 页直读 Cloudflare（Zone.DNS:Read）
-CF_ZONE_IDS=            # 逗号分隔的 zone id
+### 2. 导入仓库
+
+Vercel Dashboard → Add New Project → 选 `ice-a/trading` → Framework 自动识别 Nuxt。
+
+### 3. 配环境变量
+
+Project Settings → Environment Variables：
+
+| 变量 | 值 | 必需 |
+| --- | --- | --- |
+| `TURSO_DATABASE_URL` | `libsql://xxxx.turso.io` | ✅ |
+| `TURSO_AUTH_TOKEN` | `ey...` | ✅ |
+| `CRON_SECRET` | 随机串 | ✅（cron 鉴权） |
+| `GITHUB_TOKEN` | GitHub PAT | 可选（提高配额） |
+| `CF_API_TOKEN` | Cloudflare token（Zone.DNS:Read） | 可选（/dns 直读） |
+| `CF_ZONE_IDS` | `zone1,zone2` | 可选 |
+
+### 4. 部署
+
+push 到 master 即自动部署。部署完访问 `/api/health`：
+
+```json
+{"ok":true,"runtime":"vercel","storage":"libsql","db":{"mode":"remote","url":"libsql://..."}}
+```
+
+### 5. 灌第一批数据
+
+```bash
+curl "https://<your-app>.vercel.app/api/cron" -H "Authorization: Bearer $CRON_SECRET"
+```
+
+### 6. 定时抓取的真相（Hobby 限制）
+
+**Vercel Hobby 的 cron 每天只能跑一次**，`vercel.json` 里配的是：
+
+```json
+"crons": [{ "path": "/api/cron", "schedule": "0 3 * * *" }]
+```
+
+想要**每小时**更新，用免费的外部定时打 `/api/crawl`：
+
+```bash
+curl -fsS -X POST "https://<your-app>.vercel.app/api/crawl?token=$CRON_TOKEN"
+```
+
+或加一个 GitHub Actions（每小时一次，额度充足）：
+
+```yaml
+on:
+  schedule: [{ cron: "5 * * * *" }]
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS -X POST "https://<your-app>.vercel.app/api/crawl?token=${{ secrets.CRON_TOKEN }}"
 ```
 
 ---
 
-## 数据模型（SQLite）
+## 部署到 1 核 1G 服务器（可选）
 
-一个文件 12 张表，schema 见 [`db/schema.sql`](db/schema.sql)。
+自建不需要 Turso，直接本地 SQLite：
+
+```bash
+git clone -b dist https://github.com/ice-a/trading.git /opt/liaowangtai
+cd /opt/liaowangtai
+cp .env.example .env                        # DB_PATH=data/app.db
+node scripts/db-cli.mjs init && node scripts/db-cli.mjs seed
+pm2 start deploy/ecosystem.config.cjs
+pm2 save && pm2 startup
+```
+
+`deploy/` 里还有 `Caddyfile`、`deploy.sh`、`liaowangtai.systemd.service`（备选）。
+
+> `dist` 分支只放构建产物（自包含依赖），服务器不需要 `npm install`。
+> 本地发版 `./scripts/publish-dist.sh`，服务器更新 `./update.sh`。
+
+---
+
+## 数据模型
+
+5 张表，见 [`db/schema.sql`](db/schema.sql)。
 
 | 表 | 用途 | 主键 |
 | --- | --- | --- |
 | `trending_repos` | 榜单仓库（日/周/月 × 日期） | `(date, period, repo_key)` |
 | `crawl_runs` | 抓取日志 | `id` |
-| `app_meta` | 运行元信息（上次成功时间等） | `key` |
-| `feed_snapshots` | 60s 聚合端点快照（归一化 JSON） | `key` |
-| `nav_categories` / `nav_links` | 导航分类 / 站点 | `key` / `id` |
-| `ai_boards` / `ai_items` | AI 板块 / 资源（含教程 markdown） | `key` / `id` |
-| `github_creators` | 关注列表 | `login` |
+| `app_meta` | 运行元信息（上次抓取时间等） | `key` |
 | `dns_records` | DNS 看板缓存 | `host` |
-| `shares` | 分享短链 | `sid` |
-| `crawl_locks` | 抓取锁（行 + 过期时间） | `name` |
+| `crawl_locks` | 抓取锁（防并发） | `name` |
 
-榜单行的关键语义：
-
-| 字段 | 含义 |
-| --- | --- |
-| `bucket` | `0` 今日前 N 名 / `1` 榜内其他 / `2` 已掉榜 |
-| `dropped` | 是否掉出当日榜单（保留，不删行） |
-| `best_rank` | 历史最高名次 |
-| `snapshots` | 最近 48 个采样点的 JSON 时间序列 |
+榜单行语义：`bucket` = `0` 前 N 名 / `1` 榜内其他 / `2` 已掉榜；`dropped` 掉榜标记；`snapshots` 最近 48 个采样点。
 
 ---
 
-## 部署到 1 核 1G 服务器
+## API
 
-### 1. 装 Node
-
-```bash
-# Debian/Ubuntu：NodeSource 或 nvm 均可，要求 >= 22.5
-node -v
-```
-
-### 2. 建目录 + 拉代码（或只用 rsync 推产物）
-
-```bash
-sudo mkdir -p /opt/liaowangtai && sudo chown $USER:$USER /opt/liaowangtai
-cd /opt/liaowangtai
-git clone https://github.com/ice-a/trading.git .
-```
-
-> 也可以用 `deploy/deploy.sh`：本地构建后只把 `.output`（5MB）同步过去，服务器完全不跑构建。
-
-### 3. 初始化数据库
-
-```bash
-node scripts/db-cli.mjs init
-node scripts/db-cli.mjs seed     # 可选
-```
-
-**服务器不需要 `npm install`**：`.output` 是自包含的（自带 38 个生产依赖），
-`db-cli.mjs` 只用 Node 内置模块。服务器上只有 `node` + `pm2` 两样东西。
-
-### 4. PM2 守护
-
-```bash
-# 装一次（用 Node 自带 npm 即可）
-npm i -g pm2
-
-cd /opt/liaowangtai
-pm2 start ecosystem.config.cjs      # 配置在 deploy/ecosystem.config.cjs
-pm2 save                            # 保存进程列表
-pm2 startup                         # 按它输出的那条 sudo 命令执行，实现开机自启
-
-pm2 status
-pm2 logs liaowangtai --lines 60
-```
-
-**必须是单实例 fork 模式**（配置里已固定）：SQLite 是单文件单连接，cluster 多进程会抢写锁并让定时器重复抓取。配置里已经写死 `instances: 1` + `exec_mode: 'fork'`，改目录时只要 `export APP_DIR=...` 即可，不用改文件。
-
-| 命令 | 作用 |
-| --- | --- |
-| `pm2 startOrReload ecosystem.config.cjs` | 首次启动 / 原子重载（部署脚本用的就是这条） |
-| `pm2 restart liaowangtai` | 重启 |
-| `pm2 stop liaowangtai` | 停止（会走 15 秒优雅退出，等抓取收尾） |
-| `pm2 logs liaowangtai --err` | 只看错误 |
-| `pm2 describe liaowangtai` | 重启次数、内存、启动参数 |
-| `pm2 monit` | 实时 CPU / 内存 |
-
-日志默认落在 `data/pm2-out.log` 与 `data/pm2-error.log`。想自动切割：
-
-```bash
-pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:retain 3
-```
-
-> 不想用 PM2？`deploy/liaowangtai.systemd.service` 是等价的 systemd 方案，但**两者只能启用一个**，否则会抢 3000 端口。
-
-### 5. Caddy 反代
-
-```bash
-sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # 改域名
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-```
-
-Caddy 配好了 `encode zstd gzip`、`/_nuxt/*` 长缓存、页面 `no-cache`，
-以及 `/api/refresh` 需要的 **120 秒**反代超时（抓取是同步的，可能跑 20 秒）。
-
-如果服务器上已有 Caddyfile（和 sing-box 共用），只需要追加这一段：
-
-```caddyfile
-liaowangtai.example.com {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:3000 {
-		transport http {
-			response_header_timeout 120s
-		}
-	}
-}
-```
-
-### 6. 验证
-
-```bash
-curl -s http://127.0.0.1:3000/api/health
-curl -s https://your-domain/api/trending?page=1 | head -c 200
-```
-
-`health` 返回 `"ok":true,"storage":"sqlite"` 即通。
-
-### 7. 备份
-
-```bash
-# 手动
-node scripts/backup-db.mjs          # VACUUM INTO，抓取中也能备份
-
-# crontab：每天 4 点，保留 7 份
-0 4 * * * cd /opt/liaowangtai && /usr/bin/node scripts/backup-db.mjs >> data/backup.log 2>&1
-```
-
-### 7.5 另一条路：服务器纯 git 部署（dist 分支）
-
-不想用 rsync？仓库里有一个 **`dist` 分支**，只放构建产物（约 8MB，自包含依赖）。
-服务器 clone 它就能直接跑，全程不碰 npm：
-
-```bash
-# 首次
-git clone -b dist https://github.com/ice-a/trading.git /opt/liaowangtai
-cd /opt/liaowangtai
-cp .env.example .env
-node scripts/db-cli.mjs init && node scripts/db-cli.mjs seed
-pm2 start deploy/ecosystem.config.cjs && pm2 save && pm2 startup
-
-# 之后每次更新（服务器上执行）
-./update.sh          # git fetch dist → reset --hard → pm2 restart → 健康检查
-```
-
-发新版时在本地跑：
-
-```bash
-./scripts/publish-dist.sh     # 构建 + 强制推送 dist 分支
-```
-
-`data/` 与 `.env` 在 dist 分支的 `.gitignore` 里，`reset --hard` 不会覆盖你的数据库。
-
-### 8. 更新版本
-
-```bash
-HOST=user@your-server ./deploy/deploy.sh    # 本地构建 + 同步 + 重启 + 健康检查
-```
-
----
-
-## 与 sing-box / Caddy 共存
-
-- **端口**：应用只监听 `127.0.0.1:3000`，不占公网端口，不会和 sing-box 抢
-- **Caddy**：占 80/443 做 TLS 与反代；sing-box 用其它端口（或 Caddy 反代到 sing-box 的入站）
-- **内存**：应用限 320M 堆 / 450M 上限，给 sing-box 与 Caddy 留足余量
-- **CPU**：抓取只占 4~19 秒，每小时一次；`CPUQuota=90%` 防止单次抓取把机器占满
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/trending` | 单周期榜单（`date`/`period`/`page`） |
+| GET | `/api/trending-bundle` | 日/周/月三份一次取回 |
+| GET | `/api/history` | 历史总览 |
+| GET | `/api/dns` | DNS 看板（`?probe=1` 触发探活） |
+| GET | `/api/hitokoto` | 一言 |
+| GET | `/api/github-search` · `/api/repos` | GitHub 查询 |
+| POST | `/api/refresh` | 页面按需刷新（1 小时节流，`?force=1`） |
+| GET/POST | `/api/crawl` | 强制抓取（`token` 鉴权） |
+| GET | `/api/cron` | Vercel Cron 入口（`Bearer CRON_SECRET`） |
+| GET | `/api/health` · `/api/status` | 自检 / 调度状态 |
 
 ---
 
 ## 目录结构
 
 ```
-├─ app/                 # 前端：页面 / 组件 / composables（Vue 3）
+├─ app/                 # 前端：5 个页面 + 组件
 ├─ server/
-│  ├─ api/              # 后端：同源 Nitro 路由（/api/*）
+│  ├─ api/              # 同源 Nitro 路由
 │  ├─ utils/
-│  │  ├─ db.ts          # SQLite 数据层（node:sqlite + 预编译缓存 + 事务）
-│  │  ├─ cache.ts       # 进程内缓存（TTL + 上限淘汰）
-│  │  ├─ env.ts         # .env 加载 + process.env
+│  │  ├─ db.ts          # 双模式数据层（file: node:sqlite / remote: libSQL）
 │  │  ├─ crawler.ts     # 抓取编排（锁 → 抓 → upsert → 日志）
-│  │  └─ feeds.ts       # 19 个聚合端点采集与归一化
-│  ├─ plugins/
-│  │  └─ scheduler.ts   # 进程内定时抓取（启动抓一轮 + 每小时）
-│  └─ config/feeds.ts   # 聚合端点定义
-├─ db/
-│  ├─ schema.sql        # 12 张表 + 索引
-│  └─ seed.sql          # 种子数据（幂等）
-├─ deploy/
-│  ├─ ecosystem.config.cjs  # PM2（单实例 fork + 内存上限 + 日志）
-│  ├─ Caddyfile             # 反代 3000 + 缓存 + 120s 超时
-│  ├─ deploy.sh             # 本地构建 → rsync → pm2 重载 → 体检
-│  └─ liaowangtai.systemd.service  # 备选：不用 PM2 时的 systemd 单元
-├─ scripts/             # db-cli / crawl-once / backup-db / verify-sql / …
-├─ archive/             # 历史脚本（Cloudflare、MongoDB、一次性 UI 调试）
-├─ nuxt.config.ts       # preset: node-server
-└─ data/                # app.db + backups（已在 .gitignore）
+│  │  ├─ trending.ts    # GitHub Trending 解析
+│  │  └─ …
+│  └─ plugins/scheduler.ts   # 仅自建环境启用进程内定时器
+├─ db/schema.sql · seed.sql
+├─ deploy/              # 自建方案（pm2 / Caddy / systemd）
+├─ scripts/             # db-cli / crawl-once / verify-sql / publish-dist
+├─ vercel.json          # cron（Hobby 每天 1 次）
+└─ nuxt.config.ts       # preset 随 VERCEL 环境切换
 ```
 
 ---
 
 ## FAQ
 
-**Q：为什么构建不能在服务器上跑？**
-`nuxt build` 峰值内存 1.2~1.8GB，1C1G 会被 OOM killer 干掉。用 `deploy/deploy.sh` 本地构建后只推 5MB 产物。
+**Q：为什么 Vercel 上不能用 SQLite 文件？**
+Serverless 函数没有持久磁盘，`/tmp` 只在单次调用内有效，实例随时销毁重建。所以必须用远程库 —— Turso 是 libSQL（SQLite 语法），schema 零改动。
 
-**Q：PM2 用 cluster 模式会不会更快？**
-不会，而且会出问题。SQLite 单文件单连接，多进程抢同一把写锁；抓取定时器也会每个进程跑一遍。配置里已固定 `instances: 1` + `fork`。
+**Q：Turso 免费额度够吗？**
+500MB 存储 + 10 亿行读/月。这个站点一天几十行写入、页面读几十次，绰绰有余。
 
-**Q：能多进程 / pm2 cluster 吗？**
-单机 SQLite 单连接，**只能单实例**。要更高并发就把 `NODE_OPTIONS` 调大、或换 PostgreSQL —— 但对这个站点的量级（个人使用）没必要。
+**Q：抓取会不会超时？**
+GitHub Trending 一次抓 3 个周期约 3~5 秒。`nuxt.config` 里已给 Vercel 函数配了 `maxDuration: 60`、`memory: 1024`。
 
-**Q：数据会不会丢？**
-WAL + `synchronous=NORMAL`：断电最多丢最后一次事务。跑 `scripts/backup-db.mjs`（`VACUUM INTO`）可以热备份，抓到一半也能备份。
+**Q：Vercel 上还要 pm2 吗？**
+不需要。`deploy/` 那套是给自建服务器的，Vercel 上完全不生效。
 
-**Q：不用内置定时器，想用系统 cron？**
-设 `ENABLE_SCHEDULER=false`，然后 `*/60 * * * * curl -fsS -X POST http://127.0.0.1:3000/api/crawl -H 'x-cron-token: ...'`。
-
-**Q：`/dns` 页面还需要 Cloudflare token 吗？**
-要，但只需 **Zone → DNS → Read**（不是部署用的那种大权限）。不配就只读 `dns_records` 缓存。
-
-**Q：想加 HTTPS 以外的端口 / 子路径？**
-Caddy 里加 `handle_path /app/* { reverse_proxy 127.0.0.1:3000 }` 即可，应用侧已按相对路径工作。
+**Q：本地构建报 `node:sqlite` 找不到？**
+需要 Node ≥ 22.5。Node 22.x 要加 `--experimental-sqlite`，Node 23+ 默认可用。

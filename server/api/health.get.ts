@@ -1,6 +1,6 @@
 import { pingDb, dbInfo } from '../utils/db'
 
-/** GET /api/health —— 数据库连通性 + 进程资源自检（1C1G 机器上尤其有用） */
+/** GET /api/health —— 数据库连通性 + 进程资源自检 */
 export default defineEventHandler(async (event) => {
   const ping = await pingDb()
   const info = dbInfo()
@@ -8,13 +8,9 @@ export default defineEventHandler(async (event) => {
   setResponseStatus(event, ping.ok ? 200 : 503)
   return {
     ok: ping.ok,
-    runtime: 'node',
-    storage: 'sqlite',
-    db: {
-      path: ping.path,
-      bytes: info.bytes,
-      statements: info.statements
-    },
+    runtime: process.env.VERCEL ? 'vercel' : 'node',
+    storage: info.mode === 'remote' ? 'libsql' : 'sqlite',
+    db: info,
     latencyMs: ping.latencyMs,
     uptimeSec: Math.round(process.uptime()),
     rssMB: Math.round(process.memoryUsage().rss / 1_048_576),

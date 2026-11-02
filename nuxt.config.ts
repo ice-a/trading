@@ -21,7 +21,13 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
 
   nitro: {
-    preset: 'node-server',
+    // Vercel 上用 vercel preset（Serverless Functions），自建服务器用 node-server
+    preset: process.env.VERCEL ? 'vercel' : 'node-server',
+
+    // Vercel 函数配置：抓取接口要跑 3~5 秒，冷启动叠加后可能超默认 10 秒
+    vercel: {
+      functions: { maxDuration: 60, memory: 1024 }
+    },
 
     // 静态资源（.output/public）由 Nitro 直接服务；压缩交给前置的 Caddy
     compressPublicAssets: false,

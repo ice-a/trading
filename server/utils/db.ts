@@ -1,28 +1,24 @@
 /**
- * 唯一数据层：本地 SQLite 单文件（node:sqlite，Node 内置模块，零外部依赖）。
+ * 唯一数据层，两种后端共用一个接口：
  *
- * ── 为什么是 SQLite 而不是 JSON ─────────────────────────────
- * 榜单 + 聚合快照本质是关系型查询：按 date/period 过滤、按 bucket/rank 排序、
- * 翻页、union 统计、upsert 去重。JSON 方案这些操作都要全量 parse 进内存，
- * 数据量一涨（几个月的历史榜单 + 19 个端点快照）就会变成 CPU 与 GC 灾难。
- * SQLite 是单文件、有索引、WAL 支持并发读，1C1G 上完全够用。
+ *   file   （默认）本地 SQLite 单文件，走 Node 内置 node:sqlite —— 零编译、零依赖，
+ *          适合本地开发与 1C1G 自建（进程常驻、有真实磁盘）。
  *
- * ── 为什么用 node:sqlite 而不是 better-sqlite3 ──────────────
- * better-sqlite3 要 node-gyp 编译（1C1G 上装一次很久，还得有 python/gcc）。
- * node:sqlite 是 Node 内置的同步驱动：
- *   - Node >= 23 默认可用
- *   - Node 22.5 ~ 22.x 需要 --experimental-sqlite
+ *   remote 远程 libSQL（Turso / sqld），走 HTTP —— 适合 Vercel 这类
+ *          serverless：函数没有持久磁盘，/tmp 不跨实例，写不进本地文件。
  *
- * ── 连接模型（部署时的重要约束）──────────────────────────────
- * 单进程、单连接、同步驱动。所以：
- *   - 只能跑**单实例**（systemd 一个进程 / pm2 fork 模式 1 个 worker）
- *   - 不要用 pm2 cluster 或多副本：SQLite 写锁会让进程互相等
- *   - 读多写少正好匹配 WAL：抓取写库不阻塞页面读
+ * 选择只看环境变量：
+ *   配了 TURSO_DATABASE_URL（+ 可选 TURSO_AUTH_TOKEN）→ remote
+ *   否则读 DB_PATH（默认 data/app.db）              → file
+ *
+ * 两个驱动都用**动态 import**：
+ *   · Vercel 的 Node 版本可能没开 --experimental-sqlite，静态 import node:sqlite 会炸
+ *   · 自建机器不需要把 libsql 客户端打进产物
+ * 这样各环境只加载自己需要的那个。
  */
 
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { env } from './env'
 
 export interface SqlStmt {
@@ -30,39 +26,54 @@ export interface SqlStmt {
   params?: unknown[]
 }
 
-type SqlValue = string | number | bigint | null | Uint8Array
+export type DbMode = 'file' | 'remote'
+export interface SqlRunResult {
+  changes: number
+  lastInsertRowid: number
+}
 
-let connection: DatabaseSync | null = null
-let connectionPath = ''
+/** node:sqlite 的最小接口（只声明我们用到的部分，避免依赖其完整类型） */
+interface FileStmt {
+  all: (...params: unknown[]) => unknown[]
+  get: (...params: unknown[]) => unknown
+  run: (...params: unknown[]) => unknown
+}
+interface FileDb {
+  prepare: (sql: string) => FileStmt
+  exec: (sql: string) => void
+  close: () => void
+}
 
-/** 预编译语句缓存：同样的 SQL 只编译一次（同步驱动下这是最划算的优化） */
-const statements = new Map<string, StatementSync>()
+/* ---------- 驱动句柄（懒加载，各环境只初始化一个） ---------- */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let fileDb: any = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let remoteDb: any = null
+let filePath = ''
+const statements = new Map<string, unknown>()
 const MAX_STATEMENTS = 256
 
-function resolveDbPath(): string {
-  const raw = env('DB_PATH', 'data/app.db')
-  return resolve(process.cwd(), raw)
+export function dbMode(): DbMode {
+  return env('TURSO_DATABASE_URL', '') ? 'remote' : 'file'
 }
 
-function prepare(sql: string): StatementSync {
-  const cached = statements.get(sql)
-  if (cached) return cached
-
-  const db = getDb()
-  const stmt = db.prepare(sql)
-  if (statements.size >= MAX_STATEMENTS) statements.clear()
-  statements.set(sql, stmt)
-  return stmt
+function fileDbPath(): string {
+  if (!filePath) filePath = resolve(process.cwd(), env('DB_PATH', 'data/app.db'))
+  return filePath
 }
 
-export function getDb(): DatabaseSync {
-  if (connection) return connection
+async function getFile(): Promise<FileDb> {
+  if (fileDb) return fileDb
 
-  const path = resolveDbPath()
+  const { DatabaseSync } = (await import('node:sqlite')) as unknown as {
+    DatabaseSync: new (path: string) => FileDb
+  }
+
+  const path = fileDbPath()
   mkdirSync(dirname(path), { recursive: true })
 
   const db = new DatabaseSync(path)
-  // WAL：写不阻塞读；synchronous=NORMAL：断电最多丢最后一次事务，性能显著更好
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -70,103 +81,205 @@ export function getDb(): DatabaseSync {
     PRAGMA foreign_keys = ON;
     PRAGMA temp_store = MEMORY;
   `)
-
-  connection = db
-  connectionPath = path
-  console.log(`[db] SQLite 已打开：${path}`)
-  return db
+  fileDb = db
+  console.log(`[db] file 模式 · ${path}`)
+  return fileDb
 }
 
-export function hasDb(): boolean {
-  try {
-    getDb()
-    return true
-  } catch {
-    return false
+async function getRemote(): Promise<{
+  execute: (args: { sql: string; args: unknown[] }) => Promise<{
+    rows: unknown[]
+    rowsAffected: number
+    lastInsertRowid?: bigint | number
+  }>
+  batch: (
+    stmts: Array<{ sql: string; args: unknown[] }>,
+    mode?: 'write'
+  ) => Promise<unknown>
+}> {
+  if (remoteDb) return remoteDb
+
+  const { createClient } = (await import('@libsql/client/web')) as unknown as {
+    createClient: (opts: { url: string; authToken?: string }) => never
   }
+
+  remoteDb = createClient({
+    url: env('TURSO_DATABASE_URL', ''),
+    authToken: env('TURSO_AUTH_TOKEN', '') || undefined
+  })
+  console.log('[db] remote 模式 · libSQL')
+  return remoteDb
 }
 
-/** 建表 / 灌种子（运维脚本与启动时使用） */
-export function execScript(sql: string): void {
-  getDb().exec(sql)
-  statements.clear()
+function prepareFile(db: FileDb, sql: string): FileStmt {
+  const cached = statements.get(sql) as FileStmt | undefined
+  if (cached) return cached
+  const stmt = db.prepare(sql)
+  if (statements.size >= MAX_STATEMENTS) statements.clear()
+  statements.set(sql, stmt)
+  return stmt
 }
+
+/* ---------- 对外接口（调用方不关心后端） ---------- */
 
 export async function sqlAll<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-  return prepare(sql).all(...(params as SqlValue[])) as T[]
+  if (dbMode() === 'remote') {
+    const client = await getRemote()
+    const rs = await client.execute({ sql, args: params })
+    return rs.rows as T[]
+  }
+  const db = await getFile()
+  const stmt = prepareFile(db, sql) as unknown as { all: (...p: unknown[]) => unknown[] }
+  return stmt.all(...params) as T[]
 }
 
 export async function sqlFirst<T>(sql: string, params: unknown[] = []): Promise<T | null> {
-  const row = prepare(sql).get(...(params as SqlValue[]))
-  return (row as T) ?? null
+  if (dbMode() === 'remote') {
+    const rows = await sqlAll<T>(sql, params)
+    return rows[0] ?? null
+  }
+  const db = await getFile()
+  const stmt = prepareFile(db, sql) as unknown as { get: (...p: unknown[]) => unknown }
+  return ((await stmt.get(...params)) as T) ?? null
 }
 
-export async function sqlRun(sql: string, params: unknown[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
-  const r = prepare(sql).run(...(params as SqlValue[]))
-  return {
-    changes: Number(r.changes ?? 0),
-    lastInsertRowid: Number(r.lastInsertRowid ?? 0)
+export async function sqlRun(sql: string, params: unknown[] = []): Promise<SqlRunResult> {
+  if (dbMode() === 'remote') {
+    const client = await getRemote()
+    const rs = await client.execute({ sql, args: params })
+    return { changes: rs.rowsAffected, lastInsertRowid: Number(rs.lastInsertRowid ?? 0) }
   }
+  const db = await getFile()
+  const stmt = prepareFile(db, sql) as unknown as {
+    run: (...p: unknown[]) => { changes: number | bigint; lastInsertRowid: number | bigint }
+  }
+  const r = stmt.run(...params)
+  return { changes: Number(r.changes ?? 0), lastInsertRowid: Number(r.lastInsertRowid ?? 0) }
 }
 
 /**
- * 批量写入：一个事务包住所有语句。
- * 抓取时一次几百条 upsert，事务化能把耗时从「每条一次 fsync」压到「一次 fsync」，
- * 对 1C1G 的小盘尤其重要。
+ * 批量写入。
+ * file  ：一个 BEGIN IMMEDIATE 事务包住（几百条 upsert 只 fsync 一次）
+ * remote：libSQL 的 batch 本身在事务里执行
  */
 export async function sqlBatch(stmts: SqlStmt[]): Promise<void> {
   if (!stmts.length) return
-  const db = getDb()
+
+  if (dbMode() === 'remote') {
+    const client = await getRemote()
+    await client.batch(
+      stmts.map((s) => ({ sql: s.sql, args: s.params ?? [] })),
+      'write'
+    )
+    return
+  }
+
+  const db = await getFile()
   db.exec('BEGIN IMMEDIATE')
   try {
     for (const s of stmts) {
-      prepare(s.sql).run(...((s.params ?? []) as SqlValue[]))
+      const stmt = prepareFile(db, s.sql) as unknown as { run: (...p: unknown[]) => unknown }
+      stmt.run(...(s.params ?? []))
     }
     db.exec('COMMIT')
   } catch (err) {
     try {
       db.exec('ROLLBACK')
     } catch {
-      /* 回滚失败（连接已坏）时交给上层报错 */
+      /* 回滚失败交给上层报错 */
     }
     throw err
   }
 }
 
-/** 健康检查 */
-export async function pingDb(): Promise<{
-  ok: boolean
-  latencyMs: number
-  path: string
-  error?: string
-}> {
+/** 建表 / 灌种子（运维脚本用；远程模式下同样走 HTTP） */
+export async function execScript(sqlText: string): Promise<void> {
+  if (dbMode() === 'remote') {
+    const client = await getRemote()
+    // libSQL 的 execute 一次只能跑一条语句，按分号切分（避开字符串里的分号）
+    for (const chunk of splitSql(sqlText)) {
+      await client.execute({ sql: chunk, args: [] })
+    }
+    return
+  }
+  const db = await getFile()
+  db.exec(sqlText)
+  statements.clear()
+}
+
+/** 简易 SQL 切分：够用于我们自己的 schema/seed（无 $$ 块、无存储过程） */
+function splitSql(text: string): string[] {
+  const out: string[] = []
+  let buf = ''
+  let inString = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === "'") {
+      // 处理 '' 转义
+      if (inString && text[i + 1] === "'") {
+        buf += "''"
+        i++
+        continue
+      }
+      inString = !inString
+      buf += ch
+      continue
+    }
+    if (ch === '-' && text[i + 1] === '-' && !inString) {
+      // 跳过行注释
+      while (i < text.length && text[i] !== '\n') i++
+      continue
+    }
+    if (ch === ';' && !inString) {
+      const stmt = buf.trim()
+      if (stmt) out.push(stmt)
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  const tail = buf.trim()
+  if (tail) out.push(tail)
+  return out
+}
+
+/* ---------- 诊断 ---------- */
+
+export interface DbInfo {
+  mode: DbMode
+  path?: string
+  bytes?: number
+  url?: string
+  statements?: number
+}
+
+export function dbInfo(): DbInfo {
+  if (dbMode() === 'remote') {
+    const url = env('TURSO_DATABASE_URL', '')
+    // 隐藏 token 类片段，只留主机名
+    return { mode: 'remote', url: url.replace(/\/\/[^@]*@/, '//') }
+  }
+  let bytes = 0
+  try {
+    bytes = statSync(filePath || fileDbPath()).size
+  } catch {
+    bytes = 0
+  }
+  return { mode: 'file', path: filePath || fileDbPath(), bytes, statements: statements.size }
+}
+
+export async function pingDb(): Promise<{ ok: boolean; latencyMs: number; mode: DbMode; error?: string }> {
+  const mode = dbMode()
   const t0 = Date.now()
   try {
-    getDb().prepare('select 1 as ok').get()
-    return { ok: true, latencyMs: Date.now() - t0, path: connectionPath }
+    await sqlFirst('select 1 as ok')
+    return { ok: true, latencyMs: Date.now() - t0, mode }
   } catch (err) {
     return {
       ok: false,
       latencyMs: Date.now() - t0,
-      path: connectionPath || resolveDbPath(),
+      mode,
       error: err instanceof Error ? err.message : String(err)
     }
   }
-}
-
-/** 库文件信息（status 页显示用） */
-export function dbInfo(): { path: string; bytes: number; statements: number } {
-  let bytes = 0
-  try {
-    bytes = statSync(connectionPath).size
-  } catch {
-    bytes = 0
-  }
-  return { path: connectionPath, bytes, statements: statements.size }
-}
-
-export function closeDb(): void {
-  statements.clear()
-  connection?.close()
-  connection = null
 }

@@ -1,6 +1,6 @@
 import { env } from '../utils/env'
 import { sqlBatch } from '../utils/db'
-import { listDnsRecords, updateDnsStatus } from '../utils/site'
+import { listDnsRecords, updateDnsStatus } from '../utils/dns'
 
 /**
  * GET /api/dns?probe=1&source=auto
