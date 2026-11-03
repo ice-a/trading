@@ -8,7 +8,7 @@ const items = [
   { to: '/', label: 'GitHub 日榜', icon: '📈' },
   { to: '/github', label: 'GitHub', icon: '🐙' },
   { to: '/avatar', label: '个性头像', icon: '🎨' },
-  { to: '/dns', label: 'Cloudflare DNS', icon: '🌐' },
+  { to: '/stack', label: '行情', icon: '📊' },
   { to: '/history', label: '历史', icon: '🗓️' }
 ]
 

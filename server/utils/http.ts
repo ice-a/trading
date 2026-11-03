@@ -20,6 +20,17 @@ export async function httpFetch(url: string, init: HttpOptions = {}): Promise<Re
   const merged = new Headers(headers || {})
   if (!merged.has('User-Agent')) merged.set('User-Agent', DEFAULT_UA)
 
+  /**
+   * 必须显式关掉压缩。
+   *
+   * 实测（Node 24 + 东方财富 CDN）：不设这个头时 fetch 会带上
+   * `Accept-Encoding: gzip, deflate, br`，而该 CDN 返回的压缩流会让
+   * Node 的 undici 直接在读 body 阶段抛 `UND_ERR_SOCKET`（表现为 "fetch failed"）。
+   * 同一个 URL 用 curl 正常、用 identity 也正常 —— 是解压链路的兼容问题。
+   * 请求量很小（每天几次行情），不压缩的带宽代价可以忽略。
+   */
+  if (!merged.has('Accept-Encoding')) merged.set('Accept-Encoding', 'identity')
+
   // 上层传入 signal 时以它为准（用于整体取消），否则只加超时
   const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const effectiveSignal = signal ?? timeoutSignal

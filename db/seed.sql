@@ -6,5 +6,8 @@
 -- 的话 /dns 会自己从 Cloudflare 拉，这里只放一条示例，方便没配 token 时看效果。
 -- ============================================================
 
-insert or replace into dns_records (host, name, type, target, proxied, status, latency_ms, http_status, checked_at)
-values ('example.com', 'example.com', 'A', '127.0.0.1', 1, 'unknown', 0, 0, null);
+-- 汇率初始值（1 外币 = ? 人民币），可在 /stack 页面里随时改
+insert or replace into fx_rates (currency, cny_rate, updated_at) values
+  ('CNY', 1,      datetime('now')),
+  ('HKD', 0.92,   datetime('now')),
+  ('USD', 7.2,    datetime('now'));

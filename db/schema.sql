@@ -60,21 +60,6 @@ CREATE TABLE IF NOT EXISTS app_meta (
   updated_at TEXT NOT NULL
 );
 
--- Cloudflare DNS 看板缓存
-CREATE TABLE IF NOT EXISTS dns_records (
-  host        TEXT PRIMARY KEY,
-  name        TEXT NOT NULL DEFAULT '',
-  type        TEXT NOT NULL DEFAULT 'A',
-  target      TEXT NOT NULL DEFAULT '',
-  proxied     INTEGER NOT NULL DEFAULT 0,
-  status      TEXT NOT NULL DEFAULT 'unknown',
-  latency_ms  INTEGER NOT NULL DEFAULT 0,
-  http_status INTEGER NOT NULL DEFAULT 0,
-  checked_at  TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at  TEXT
-);
-
 -- 抓取锁（单行 + 过期时间）
 CREATE TABLE IF NOT EXISTS crawl_locks (
   name       TEXT PRIMARY KEY,
@@ -91,3 +76,50 @@ CREATE TABLE IF NOT EXISTS response_cache (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cache_exp ON response_cache (expires_at);
+
+
+-- ============ 股票 / 持仓 ============
+
+-- 账本凭据：user → key 的哈希（不存明文）
+CREATE TABLE IF NOT EXISTS portfolios (
+  user       TEXT PRIMARY KEY,
+  key_hash   TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- 一条记录 = 一次买入/卖出；持仓由记录实时推导
+CREATE TABLE IF NOT EXISTS portfolio_trades (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_name  TEXT NOT NULL,
+  code       TEXT NOT NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  market     TEXT NOT NULL DEFAULT 'A',   -- A | HK | US | FUND
+  side       TEXT NOT NULL DEFAULT 'buy', -- buy | sell
+  venue      TEXT NOT NULL DEFAULT '',    -- 交易所/券商
+  trade_date TEXT NOT NULL,
+  quantity   REAL NOT NULL DEFAULT 0,
+  price      REAL NOT NULL DEFAULT 0,
+  fee        REAL NOT NULL DEFAULT 0,
+  currency   TEXT NOT NULL DEFAULT 'CNY',
+  note       TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trade_user ON portfolio_trades (user_name, trade_date DESC);
+
+-- 汇率：1 单位外币 = cny_rate 人民币（手工维护，不依赖外部 fx 接口）
+CREATE TABLE IF NOT EXISTS fx_rates (
+  currency   TEXT PRIMARY KEY,
+  cny_rate   REAL NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+-- 搜索历史（去重）
+CREATE TABLE IF NOT EXISTS stock_search_history (
+  user_name  TEXT NOT NULL,
+  keyword    TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_name, keyword)
+);
+CREATE INDEX IF NOT EXISTS idx_search_time ON stock_search_history (user_name, created_at DESC);

@@ -1,6 +1,6 @@
 # 瞭望台 · GitHub 日榜简报
 
-> GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + Cloudflare DNS 看板 + 历史榜单。
+> GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + 行情台（A股/港股/美股/基金 + 持仓账本）+ 历史榜单。
 
 **一个 Nuxt 全栈应用，两种部署形态共用同一份代码：**
 
@@ -21,7 +21,7 @@
 | `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `trending_repos` |
 | `/github` | 查任意 GitHub 用户的公开仓库 | GitHub 公开 API |
 | `/avatar` | 个性头像生成器（seed 可复现、4 种风格、导出 PNG） | 纯前端 SVG |
-| `/dns` | Cloudflare DNS 看板（记录 + 在线探测延迟） | `dns_records` + CF API |
+| `/stack` | 行情台：热门板块 / 热门股票 / K线 / 基金持仓 / 我的持仓 | 东方财富公开接口 + `portfolio_trades` |
 | `/history` | 历史榜单时间线 + 当日完整榜单 | `trending_repos` |
 
 > 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）。
@@ -113,8 +113,6 @@ Project Settings → Environment Variables：
 | `TURSO_AUTH_TOKEN` | `ey...` | ✅ |
 | `CRON_SECRET` | 随机串 | ✅（cron 鉴权；`/api/crawl` 也认 `CRON_TOKEN`，两者同名即可） |
 | `GITHUB_TOKEN` | GitHub PAT | 可选（提高配额） |
-| `CF_API_TOKEN` | Cloudflare token（Zone.DNS:Read） | 可选（/dns 直读） |
-| `CF_ZONE_IDS` | `zone1,zone2` | 可选 |
 
 ### 4. 部署
 
@@ -215,7 +213,10 @@ pm2 save && pm2 startup
 | `trending_repos` | 榜单仓库（日/周/月 × 日期） | `(date, period, repo_key)` |
 | `crawl_runs` | 抓取日志 | `id` |
 | `app_meta` | 运行元信息（上次抓取时间等） | `key` |
-| `dns_records` | DNS 看板缓存 | `host` |
+| `portfolios` | 持仓账本凭据（user → key 哈希） | `user` |
+| `portfolio_trades` | 买卖流水（持仓由流水实时推导） | `id` |
+| `fx_rates` | 汇率（1 外币 = ? 人民币） | `currency` |
+| `stock_search_history` | 搜索历史（去重） | `(user_name, keyword)` |
 | `crawl_locks` | 抓取锁（防并发） | `name` |
 
 榜单行语义：`bucket` = `0` 前 N 名 / `1` 榜内其他 / `2` 已掉榜；`dropped` 掉榜标记；`snapshots` 最近 48 个采样点。
@@ -229,7 +230,12 @@ pm2 save && pm2 startup
 | GET | `/api/trending` | 单周期榜单（`date`/`period`/`page`） |
 | GET | `/api/trending-bundle` | 日/周/月三份一次取回 |
 | GET | `/api/history` | 历史总览 |
-| GET | `/api/dns` | DNS 看板（`?probe=1` 触发探活） |
+| GET | `/api/stock/hot` | A股涨幅榜 + 行业板块 |
+| GET | `/api/stock/list?market=hk\|us` | 港股 / 美股热门 |
+| GET | `/api/stock/search?q=` | 搜股票 / 港股 / 美股 / 基金 |
+| GET | `/api/stock/kline?secid=` | K 线（日/周/月） |
+| GET | `/api/stock/fund?code=` | 基金前十重仓 |
+| GET/POST | `/api/stock/portfolio` | 持仓账本（user + key） |
 | GET | `/api/hitokoto` | 一言 |
 | GET | `/api/github-search` · `/api/repos` | GitHub 查询 |
 | POST | `/api/refresh` | 页面按需刷新（1 小时节流，`?force=1`） |
