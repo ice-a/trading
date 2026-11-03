@@ -1,34 +1,50 @@
 /**
- * 行情数据源（东方财富公开接口）。
+ * 行情数据源：腾讯财经（主） + 新浪财经（榜单/板块兜底）。
  *
- * 实测结论（2026-11）——这决定了实现方式：
- *   ✅ searchapi/suggest/get        搜索：A股 / 港股 / 美股 / 基金 / 指数 全支持
- *   ✅ push2/qt/stock/get           单只报价：A股 / 港股 / 美股 都可
- *   ✅ push2his/qt/stock/kline      日/周/月 K 线
- *   ✅ push2/qt/clist/get           A股涨幅榜、板块列表（需带 UA）
- *   ✅ fundf10/FundArchivesDatas   基金持仓（HTML 片段，需解析）
- *   ❌ ulist.np/get / clist 美股港股  批量/列表接口返回空
- *   ➜ 美股/港股热门榜只能逐只并发查 stock/get（我们给固定候选池）
+ * ⚠️ 为什么不用东方财富
+ *   实测（2026-11）：push2 / push2his / searchapi / fundf10 四个域名的 https
+ *   在 Node 的 fetch 下直接 UND_ERR_SOCKET（TLS 被 CDN 拒绝）；换成 http 后本机可用，
+ *   但**部署到 Vercel 后**全部请求在 9 秒超时（境外到东财的链路不通/挂起）。
+ *   线上实测证据：/api/stock/hot 与 /api/stock/list 均返回
+ *   "TimeoutError: The operation was aborted due to timeout"。
+ *   因此整体切到腾讯（qt.gtimg.cn / ifzq.gtimg.cn / smartbox.gtimg.cn）
+ *   与新浪（vip.stock.finance.sina.com.cn），两者在国内与境外响应都正常。
  *
- * secid 前缀：沪 1.、深 0.、港股 116.、美股 105.、板块 90.BKxxxx、基金 0.xxxxxx
+ * 数据源分工：
+ *   搜索      → smartbox.gtimg.cn/s3      返回 market~symbol~name~pinyin~type，Unicode 转义
+ *   实时报价  → qt.gtimg.cn/q=            GBK 编码，~ 分隔的定长字段表
+ *   K 线      → web.ifzq.gtimg.cn         返回 JSON，字段 [date,open,close,high,low,volume]
+ *   涨幅榜    → 新浪 Market_Center.getHQNodeData（直接给 changepercent，比腾讯省一次解析）
+ *   板块      → 腾讯 proxy.finance.qq.com 的 getRank?board_type=hy
+ *   基金持仓  → 天天基金 FundArchivesDatas（HTML 片段；这个域名的 https 仍然可用）
  *
- * ⚠️ 必须用 http:// 而不是 https://
- *   实测（Windows / Node 24）：这些域名的 https 在 Node 的 fetch 下直接
- *   UND_ERR_SOCKET（TLS 握手被 CDN 拒绝），但 curl 正常、http:// 正常。
- *   同类问题在 Vercel 上不一定复现，但用 http 是两边都稳的选择（内容都是公开行情）。
+ * 腾讯符号规则（重要，别写反）：
+ *   A股   沪 sh600519 / 深 sz000001 / 北 bj920xxx
+ *   港股  hk00700（5 位）
+ *   美股  usAAPL（**不加后缀**；实测 usAAPL.OQ、usAAPL.N 都返回 none_match）
+ *   基金  sz161131（场内基金用深/沪前缀）
  */
 
 import { httpFetch } from './http'
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'
 const HEADERS: Record<string, string> = {
-  'User-Agent': UA,
-  Referer: 'https://quote.eastmoney.com/',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  Referer: 'https://gu.qq.com/',
   Accept: '*/*'
 }
 
-/** 东财公开的搜索 token（网页端固定值，不是密钥） */
-const SEARCH_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8'
+/** 解码 GBK 响应（腾讯实时报价是 GBK，直接当 UTF-8 读会乱码） */
+async function textOf(res: Response, gbk = false): Promise<string> {
+  const buf = await res.arrayBuffer()
+  if (!gbk) return new TextDecoder('utf-8').decode(buf)
+  // Node 自带 ICU，TextDecoder 支持 gbk
+  try {
+    return new TextDecoder('gbk').decode(buf)
+  } catch {
+    return new TextDecoder('utf-8').decode(buf)
+  }
+}
 
 export type Market = 'A' | 'HK' | 'US' | 'FUND' | 'INDEX' | 'OTHER'
 
@@ -36,22 +52,18 @@ export interface SearchItem {
   code: string
   name: string
   market: Market
-  /** 可直接用于 quote/kline 的 secid，如 1.600519 / 116.00700 / 105.AAPL */
-  secid: string
+  /** 腾讯符号，可直接用于 quote/kline，如 sh600519 / hk00700 / usAAPL */
+  symbol: string
   typeName: string
 }
 
 export interface Quote {
   code: string
   name: string
-  secid: string
-  /** 最新价 */
+  symbol: string
   price: number
-  /** 涨跌幅 % */
   changePct: number
-  /** 涨跌额 */
   changeAmt: number
-  /** 昨收 */
   prevClose: number
   open: number
   high: number
@@ -59,6 +71,26 @@ export interface Quote {
   volume: number
   amount: number
   market: Market
+  /** 交易币种（腾讯字段里带，A股 CNY / 港股 HKD / 美股 USD） */
+  currency: string
+}
+
+/**
+ * 美股符号在「报价」和「K 线」两个接口里要求不同（实测）：
+ *   报价  qt.gtimg.cn/q=usAAPL             ✅
+ *   K 线  ...?param=usAAPL,day,,,10,qfq    ❌ 只返回 2 条 2011 年的老数据
+ *         ...?param=usAAPL.OQ,day,,,10,qfq ✅ 返回 10 条最新数据
+ * 后缀代表交易所：.OQ 纳斯达克 / .N 纽交所 / .PK 粉单。
+ * 搜索接口返回的正是带后缀的形式（如 aapl.oq），我们把它保留下来供 K 线用。
+ */
+function klineSymbolOf(symbol: string): string {
+  const sym = symbol.trim()
+  if (!/^us/i.test(sym)) return sym
+  // 已经带后缀就直接用
+  if (/\.(OQ|N|PK|OB|AM|TS|TO)$/i.test(sym)) return sym
+  const base = sym.slice(2).toUpperCase()
+  // 默认按纳斯达克处理（多数热门美股在 OQ）；错了也只是少几条数据，不影响报价
+  return `us${base}.OQ`
 }
 
 export interface KlinePoint {
@@ -78,238 +110,365 @@ export interface Sector {
   downCount: number
 }
 
-/** 市场 → secid 前缀；搜索接口给的是完整 QuoteID，这里只用于兜底 */
-function marketOf(classify: string): Market {
-  switch (classify) {
-    case 'AStock':
+/* ------------------------------------------------------------------ */
+/*  符号与市场映射                                                      */
+/* ------------------------------------------------------------------ */
+
+/** 腾讯搜索的 market 前缀 → 我们的 Market */
+function marketOf(prefix: string): Market {
+  switch (prefix) {
+    case 'sh':
+    case 'sz':
+    case 'bj':
       return 'A'
-    case 'HK':
+    case 'hk':
       return 'HK'
-    case 'UsStock':
+    case 'us':
       return 'US'
-    case 'Fund':
+    case 'jj':
+    case 'fund':
       return 'FUND'
-    case 'Index':
-      return 'INDEX'
     default:
       return 'OTHER'
   }
 }
 
-/**
- * 东财的定点数按 f59（小数位数）缩放，不能一律除以 100。
- *   实测：A股 f59=2（600519 → 144870 = 1448.70）
- *        港股 f59=3（00700 → 400800 = 400.800）
- *        美股 f59=3（AAPL  → 338320 = 338.320）
- */
-function price(raw: unknown, decimals = 2): number {
-  const n = Number(raw)
-  if (!Number.isFinite(n)) return 0
-  const d = Number.isFinite(decimals) ? Math.max(0, Math.min(6, decimals)) : 2
-  return n / 10 ** d
+/** 根据代码 + 市场推断腾讯符号（用户手动输入代码时用） */
+export function symbolOf(code: string, market: Market): string {
+  const c = code.trim()
+  if (market === 'HK') return `hk${c.padStart(5, '0')}`
+  if (market === 'US') return `us${c.toUpperCase()}`
+  if (market === 'FUND') return c.startsWith('1') ? `sz${c}` : `sh${c}`
+  // A股：6 开头沪、0/3 开头深、8/9 开头北
+  if (/^6/.test(c)) return `sh${c}`
+  if (/^[03]/.test(c)) return `sz${c}`
+  if (/^[89]/.test(c)) return `bj${c}`
+  return `sh${c}`
 }
 
-/** 搜索：A股 / 港股 / 美股 / 基金 / 指数 统一入口 */
+/** 从腾讯符号反推代码（sh600519 → 600519） */
+function codeOfSymbol(symbol: string): { code: string; market: Market } {
+  const m = symbol.match(/^([a-z]{2})(.+)$/i)
+  if (!m) return { code: symbol, market: 'OTHER' }
+  const prefix = (m[1] ?? '').toLowerCase()
+  const code = m[2] ?? ''
+  return { code, market: marketOf(prefix) }
+}
+
+/* ------------------------------------------------------------------ */
+/*  搜索                                                               */
+/* ------------------------------------------------------------------ */
+
+/** 腾讯搜索返回的 v_hint 里中文是 \uXXXX，需要还原 */
+function unescapeUnicode(s: string): string {
+  return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+}
+
+/**
+ * 搜索：A股 / 港股 / 美股 / 基金 / 指数统一入口。
+ * 返回格式：v_hint="sh~600519~贵州茅台~gzmt~GP-A^hk~00700~腾讯控股~txkg~GP^..."
+ */
 export async function searchSecurities(input: string, count = 10): Promise<SearchItem[]> {
   const kw = input.trim()
   if (!kw) return []
 
-  const url =
-    `http://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(kw)}` +
-    `&type=14&token=${SEARCH_TOKEN}&count=${count}`
-
+  const url = `https://smartbox.gtimg.cn/s3/?v=2&q=${encodeURIComponent(kw)}&t=all`
   const res = await httpFetch(url, { headers: HEADERS, timeoutMs: 8_000 })
   if (!res.ok) throw new Error(`搜索接口 ${res.status}`)
 
-  const json = (await res.json()) as {
-    QuotationCodeTable?: { Data?: Array<Record<string, unknown>> }
-  }
+  const text = unescapeUnicode(await textOf(res))
+  const m = text.match(/v_hint="([^"]*)"/)
+  if (!m || !m[1]) return []
 
-  const rows = json.QuotationCodeTable?.Data ?? []
-  return rows
-    .map((r) => ({
-      code: String(r.Code ?? ''),
-      name: String(r.Name ?? ''),
-      market: marketOf(String(r.Classify ?? '')),
-      secid: String(r.QuoteID ?? ''),
-      typeName: String(r.SecurityTypeName ?? '')
-    }))
-    .filter((r) => r.code && r.secid)
+  const parts = m[1].split('^').filter(Boolean)
+  const out: SearchItem[] = []
+
+  for (const p of parts) {
+    const [prefix, symbol, name, , typeCode] = p.split('~')
+    if (!prefix || !symbol) continue
+
+    const market = marketOf(prefix)
+    // 指数等不提供 K 线的类型先收进来，前端会按 market 分流
+    const typeName =
+      typeCode === 'ZS' ? '指数' : market === 'FUND' ? '基金' : market === 'HK' ? '港股' : market === 'US' ? '美股' : 'A股'
+
+    /**
+     * 腾讯搜索里的美股符号是 "aapl.oq"（带交易所后缀），但实时接口只认 "usAAPL"。
+     * 同理港股搜索给 "00700"，实时接口要 "hk00700"。
+     * 统一在这里规整成可直接使用的符号。
+     */
+    const cleanSymbol =
+      market === 'US'
+        ? `us${symbol.split('.')[0]?.toUpperCase() ?? symbol.toUpperCase()}`
+        : market === 'HK'
+          ? `hk${symbol.padStart(5, '0')}`
+          : `${prefix}${symbol}`
+
+    out.push({
+      code: symbol.split('.')[0]?.toUpperCase() ?? symbol,
+      name: name || symbol,
+      market,
+      symbol: cleanSymbol,
+      typeName
+    })
+    if (out.length >= count) break
+  }
+  return out
 }
 
-/** 单只报价（A股/港股/美股通用） */
-export async function fetchQuote(secid: string, market: Market = 'A'): Promise<Quote | null> {
-  const url =
-    `http://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}` +
-    `&fields=f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f169,f170,f168`
+/* ------------------------------------------------------------------ */
+/*  实时报价                                                           */
+/* ------------------------------------------------------------------ */
 
-  const res = await httpFetch(url, { headers: HEADERS, timeoutMs: 8_000 })
-  if (!res.ok) return null
+/**
+ * 腾讯实时字段表（~ 分隔，索引从 0 开始）：
+ *   0 未知  1 名称  2 代码  3 现价  4 昨收  5 今开  6 成交量(手)
+ *   30 时间  31 涨跌额  32 涨跌幅%  33 最高  34 最低  35 价格/成交量/成交额
+ *   36 成交量  37 成交额(万)  ...  最后一带有币种（A股 CNY、美股 USD）
+ */
+function parseTencentQuote(raw: string, symbol: string): Quote | null {
+  const m = raw.match(/v_[^=]+="([^"]*)"/)
+  if (!m || !m[1]) return null
 
-  const json = (await res.json()) as {
-    data?: Record<string, unknown> | null
-  }
-  const d = json.data
-  if (!d) return null
+  const f = m[1].split('~')
+  if (f.length < 40) return null
 
-  // f59 = 价格小数位数；美元/港币常见 3 位，A股 2 位
-  const dec = Number(d.f59 ?? 2)
+  const { code, market } = codeOfSymbol(symbol)
+  const name = f[1] ?? ''
+
+  // 币种：A股在较后位置有 CNY，美股 USD，港股没有显式字段按 HKD
+  const currency = market === 'US' ? 'USD' : market === 'HK' ? 'HKD' : 'CNY'
+
+  /**
+   * 成交额字段 f37 的单位随市场不同（实测）：
+   *   A股   512269       → 万元（51.2 亿）
+   *   港股   4335259642   → 元（43.35 亿）
+   *   美股   21950929283  → 元（219.5 亿）
+   * 所以只有 A股 需要乘 10000，港美直接用。
+   */
+  const amountRaw = Number(f[37] ?? 0)
+  const amount = market === 'A' ? amountRaw * 10_000 : amountRaw
 
   return {
-    code: String(d.f57 ?? ''),
-    name: String(d.f58 ?? ''),
-    secid,
-    price: price(d.f43, dec),
-    prevClose: price(d.f60, dec),
-    open: price(d.f46, dec),
-    high: price(d.f44, dec),
-    low: price(d.f45, dec),
-    volume: Number(d.f47 ?? 0),
-    amount: Number(d.f48 ?? 0),
-    // f170 是涨跌幅（百分比的百分之一，0.01% 单位）
-    changePct: Number(d.f170 ?? 0) / 100,
-    changeAmt: price(d.f169, dec),
-    market
+    code: f[2] || code,
+    name,
+    symbol,
+    price: Number(f[3] ?? 0),
+    prevClose: Number(f[4] ?? 0),
+    open: Number(f[5] ?? 0),
+    high: Number(f[33] ?? 0),
+    low: Number(f[34] ?? 0),
+    changeAmt: Number(f[31] ?? 0),
+    changePct: Number(f[32] ?? 0),
+    volume: Number(f[6] ?? 0),
+    amount, // A股为万元（已换算），港美股本身是元
+    market,
+    currency
   }
 }
 
-/** 批量报价：给的是固定候选池，并发逐只查（批量接口对港美股不可用） */
-export async function fetchQuotes(items: Array<{ secid: string; market: Market }>): Promise<Quote[]> {
-  const settled = await Promise.allSettled(items.map((it) => fetchQuote(it.secid, it.market)))
-  return settled
-    .filter((s): s is PromiseFulfilledResult<Quote | null> => s.status === 'fulfilled')
-    .map((s) => s.value)
+/** 单只报价 */
+export async function fetchQuote(symbol: string, market?: Market): Promise<Quote | null> {
+  const sym = market && !symbol.match(/^(sh|sz|bj|hk|us)/i) ? symbolOf(symbol, market) : symbol
+  const res = await httpFetch(`https://qt.gtimg.cn/q=${encodeURIComponent(sym)}`, {
+    headers: HEADERS,
+    timeoutMs: 8_000
+  })
+  if (!res.ok) return null
+
+  const text = await textOf(res, true)
+  if (/none_match/.test(text)) return null
+  return parseTencentQuote(text, sym)
+}
+
+/** 批量报价：腾讯本身就支持逗号分隔多只，一次请求即可 */
+export async function fetchQuotes(items: Array<{ symbol: string; market?: Market }>): Promise<Quote[]> {
+  if (!items.length) return []
+
+  const syms = items.map((it) =>
+    it.market && !it.symbol.match(/^(sh|sz|bj|hk|us)/i) ? symbolOf(it.symbol, it.market) : it.symbol
+  )
+
+  // 单次最多 60 只，超过则分批
+  const CHUNK = 60
+  const out: Quote[] = []
+
+  for (let i = 0; i < syms.length; i += CHUNK) {
+    const batch = syms.slice(i, i + CHUNK)
+    try {
+      const res = await httpFetch(`https://qt.gtimg.cn/q=${batch.map(encodeURIComponent).join(',')}`, {
+        headers: HEADERS,
+        timeoutMs: 10_000
+      })
+      if (!res.ok) continue
+      const text = await textOf(res, true)
+
+      for (const line of text.split(';')) {
+        const q = parseTencentQuote(line, '')
+        if (!q) continue
+        // 从行内 v_ 前缀取真实符号
+        const sm = line.match(/v_([^=]+)=/)
+        const sym = sm?.[1] ?? ''
+        const fixed = sym ? parseTencentQuote(line, sym) : q
+        if (fixed) out.push(fixed)
+      }
+    } catch {
+      /* 单批失败跳过，不影响其它批 */
+    }
+  }
+
+  // 按请求顺序回填（腾讯返回顺序与请求一致，但分批后仍以符号为准）
+  const map = new Map(out.map((q) => [q.symbol, q]))
+  return items
+    .map((it, idx) => map.get(syms[idx] ?? '') ?? null)
     .filter((q): q is Quote => q !== null)
 }
 
-/** K 线：klt 101=日 102=周 103=月；fqt 1=前复权 */
+/* ------------------------------------------------------------------ */
+/*  K 线                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 腾讯 K 线：
+ *   https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh600519,day,,,30,qfq
+ *   返回 data[symbol].qfqday 或 .day，元素 [date, open, close, high, low, volume]
+ *
+ * 注意：这里不需要像东财那样传 beg；给数量（第 5 段）即可，且从一开始就不返回负值。
+ */
 export async function fetchKline(
-  secid: string,
+  symbol: string,
   period: 'day' | 'week' | 'month' = 'day',
   limit = 120
 ): Promise<KlinePoint[]> {
-  const klt = period === 'day' ? 101 : period === 'week' ? 102 : 103
-
-  /**
-   * 必须给 beg 一个具体日期，不能用 beg=0。
-   * 实测：beg=0 会让上游返回全部历史（2500+ 条），且前复权基准被算到很早的年份，
-   *       导致最近的数据出现负值（600519 出现 -312.68）。
-   *       给一个近几年的 beg 后完全正常。
-   */
-  const yearsBack = period === 'day' ? 2 : period === 'week' ? 5 : 10
-  const beg = `${new Date().getFullYear() - yearsBack}0101`
-
+  const p = period === 'day' ? 'day' : period === 'week' ? 'week' : 'month'
+  const qsym = klineSymbolOf(symbol)
+  // 前复权：qfq；指数/基金没有复权概念时腾讯会自动回落到 day
   const url =
-    `http://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}` +
-    `&klt=${klt}&fqt=1&beg=${beg}&end=20500101&lmt=${limit}&fields1=f1,f2,f3,f4,f5,f6` +
-    `&fields2=f51,f52,f53,f54,f55,f56`
+    `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get` +
+    `?param=${encodeURIComponent(qsym)},${p},,,${limit},qfq`
 
-  const res = await httpFetch(url, { headers: HEADERS, timeoutMs: 10_000 })
+  const res = await httpFetch(url, { headers: { ...HEADERS, Referer: 'https://gu.qq.com/' }, timeoutMs: 10_000 })
   if (!res.ok) throw new Error(`K线接口 ${res.status}`)
 
-  const json = (await res.json()) as { data?: { klines?: string[] } | null }
-  const lines = json.data?.klines ?? []
+  const json = (await res.json()) as {
+    data?: Record<string, Record<string, unknown>>
+  }
 
-  return lines
-    .map((line) => {
-      const [date, open, close, high, low, volume] = line.split(',')
-      return {
-        date: String(date),
-        open: Number(open),
-        close: Number(close),
-        high: Number(high),
-        low: Number(low),
-        volume: Number(volume)
+  // 上游返回的键可能是去后缀的形式（usAAPL.OQ → 有时键是 usAAPL）
+  const node = json.data?.[qsym] ?? json.data?.[symbol]
+  if (!node) return []
+
+  // day 图可能落在 qfqday / qfqweek / day / week 等键上，取第一个非空
+  const keys = [`qfq${p}`, p, `qfq${p}`]
+  let rows: unknown[] = []
+  for (const k of keys) {
+    const v = node[k]
+    if (Array.isArray(v) && v.length) {
+      rows = v
+      break
+    }
+  }
+  // 指数会落到 "day" 而非 qfqday，兜底再扫一遍所有数组
+  if (!rows.length) {
+    for (const v of Object.values(node)) {
+      if (Array.isArray(v) && v.length && Array.isArray(v[0])) {
+        rows = v
+        break
       }
-    })
-    .filter((p) => Number.isFinite(p.close) && p.close > 0)
+    }
+  }
+
+  return (rows as string[][])
+    .map((r) => ({
+      date: String(r[0] ?? ''),
+      open: Number(r[1] ?? 0),
+      close: Number(r[2] ?? 0),
+      high: Number(r[3] ?? 0),
+      low: Number(r[4] ?? 0),
+      volume: Number(r[5] ?? 0)
+    }))
+    .filter((p2) => Number.isFinite(p2.close) && p2.close > 0)
 }
 
-/** A股涨幅榜 */
+/* ------------------------------------------------------------------ */
+/*  榜单 / 板块                                                        */
+/* ------------------------------------------------------------------ */
+
+/** A股涨幅榜（新浪直接给 changepercent，比解析腾讯字段稳） */
 export async function fetchGainers(limit = 12): Promise<Quote[]> {
   const url =
-    `http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2` +
-    `&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f13,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18`
+    `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData` +
+    `?page=1&num=${limit}&sort=changepercent&asc=0&node=hs_a&symbol=&_s_r_a=page`
 
-  const res = await httpFetch(url, { headers: HEADERS, timeoutMs: 8_000 })
+  const res = await httpFetch(url, {
+    headers: { ...HEADERS, Referer: 'https://vip.stock.finance.sina.com.cn/' },
+    timeoutMs: 8_000
+  })
   if (!res.ok) throw new Error(`涨幅榜接口 ${res.status}`)
 
-  const json = (await res.json()) as {
-    data?: { diff?: Array<Record<string, unknown>> } | null
-  }
-  const rows = json.data?.diff ?? []
+  const rows = (await res.json()) as Array<Record<string, unknown>>
+  if (!Array.isArray(rows)) return []
 
-  return rows.map((r) => ({
-    code: String(r.f12 ?? ''),
-    name: String(r.f14 ?? ''),
-    secid: `${r.f13 ?? 0}.${r.f12 ?? ''}`,
-    price: Number(r.f2 ?? 0),
-    changePct: Number(r.f3 ?? 0),
-    changeAmt: Number(r.f4 ?? 0),
-    prevClose: Number(r.f18 ?? 0),
-    open: Number(r.f17 ?? 0),
-    high: Number(r.f15 ?? 0),
-    low: Number(r.f16 ?? 0),
-    volume: Number(r.f5 ?? 0),
-    amount: Number(r.f6 ?? 0),
-    market: 'A' as Market
-  }))
+  return rows.map((r) => {
+    const symbol = String(r.symbol ?? '')
+    const { market } = codeOfSymbol(symbol)
+    return {
+      code: String(r.code ?? ''),
+      name: String(r.name ?? ''),
+      symbol,
+      price: Number(r.trade ?? 0),
+      prevClose: Number(r.settlement ?? 0),
+      open: Number(r.open ?? 0),
+      high: Number(r.high ?? 0),
+      low: Number(r.low ?? 0),
+      changePct: Number(r.changepercent ?? 0),
+      changeAmt: Number(r.pricechange ?? 0),
+      volume: Number(r.volume ?? 0),
+      amount: Number(r.amount ?? 0),
+      market,
+      currency: 'CNY'
+    }
+  })
 }
 
-/** 行业板块涨幅榜 */
+/**
+ * 行业板块：腾讯 proxy 的 getRank。
+ *   board_type=hy 行业 / gn 概念 / dy 地域
+ */
 export async function fetchSectors(limit = 12): Promise<Sector[]> {
   const url =
-    `http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=${limit}&po=1&np=1&fltt=2&invt=2` +
-    `&fid=f3&fs=m:90+t:2&fields=f12,f14,f3,f104,f105`
+    `https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank` +
+    `?board_type=hy&sort_type=price&direct=down&offset=0&count=${limit}`
 
   const res = await httpFetch(url, { headers: HEADERS, timeoutMs: 8_000 })
   if (!res.ok) throw new Error(`板块接口 ${res.status}`)
 
   const json = (await res.json()) as {
-    data?: { diff?: Array<Record<string, unknown>> } | null
+    data?: { rank_list?: Array<Record<string, unknown>> }
   }
-  const rows = json.data?.diff ?? []
+  const rows = json.data?.rank_list ?? []
 
   return rows.map((r) => ({
-    code: String(r.f12 ?? ''),
-    name: String(r.f14 ?? ''),
-    changePct: Number(r.f3 ?? 0),
-    upCount: Number(r.f104 ?? 0),
-    downCount: Number(r.f105 ?? 0)
+    code: String(r.code ?? ''),
+    name: String(r.name ?? ''),
+    changePct: Number(r.zdf ?? r.speed ?? 0),
+    upCount: Number(r.zgb ?? 0),
+    downCount: Number(r.xgb ?? 0)
   }))
 }
 
-/**
- * 港股 / 美股热门：批量接口不可用，改为固定候选池并发查单只。
- * 候选池是长期稳定的龙头 + 中概，不追求实时"最热"，但保证有数据。
- */
-export const HK_HOT = [
-  '116.00700', // 腾讯
-  '116.09988', // 阿里
-  '116.03690', // 美团
-  '116.01810', // 小米
-  '116.09618', // 京东
-  '116.09888', // 百度
-  '116.02020', // 安踏
-  '116.00941', // 中国移动
-  '116.01299', // 友邦
-  '116.00388' // 港交所
-]
+/* ------------------------------------------------------------------ */
+/*  港美股热门池                                                       */
+/* ------------------------------------------------------------------ */
 
-export const US_HOT = [
-  '105.AAPL',
-  '105.MSFT',
-  '105.NVDA',
-  '105.TSLA',
-  '105.GOOGL',
-  '105.AMZN',
-  '105.META',
-  '105.AVGO',
-  '105.AMD',
-  '105.NFLX'
-]
+export const HK_HOT = ['hk00700', 'hk09988', 'hk03690', 'hk01810', 'hk09618', 'hk09888', 'hk02020', 'hk00941', 'hk01299', 'hk00388']
 
-/** 基金持仓（天天基金 HTML 片段 → 解析成结构化） */
+export const US_HOT = ['usAAPL', 'usMSFT', 'usNVDA', 'usTSLA', 'usGOOGL', 'usAMZN', 'usMETA', 'usAVGO', 'usAMD', 'usNFLX']
+
+/* ------------------------------------------------------------------ */
+/*  基金持仓                                                           */
+/* ------------------------------------------------------------------ */
+
 export interface FundHolding {
   code: string
   name: string
@@ -319,24 +478,23 @@ export interface FundHolding {
   reportDate: string
 }
 
+/** 基金持仓：天天基金的 HTML 片段（这个域名 https 仍可用，无需换源） */
 export async function fetchFundHoldings(fundCode: string, topline = 10): Promise<FundHolding[]> {
   const url =
-    `http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc` +
+    `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc` +
     `&code=${encodeURIComponent(fundCode)}&topline=${topline}&year=&month=`
 
   const res = await httpFetch(url, {
-    headers: { ...HEADERS, Referer: 'http://fundf10.eastmoney.com/' },
+    headers: { ...HEADERS, Referer: 'https://fundf10.eastmoney.com/' },
     timeoutMs: 10_000
   })
   if (!res.ok) throw new Error(`基金持仓接口 ${res.status}`)
 
-  const text = await res.text()
+  const text = await textOf(res)
 
-  // 报告期：<font class='px12'>2026-09-30</font>
   const dateMatch = text.match(/截止至：<font class='px12'>([^<]+)</)
   const reportDate = dateMatch?.[1] ?? ''
 
-  // 每行：<td>序号</td><td><a ...>000001</a></td><td><a ...>股票名</a></td>...<td>占比</td>
   const rows = [...text.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
 
   const out: FundHolding[] = []
@@ -348,7 +506,6 @@ export async function fetchFundHoldings(fundCode: string, topline = 10): Promise
         .replace(/&nbsp;/g, ' ')
         .trim()
     )
-    // 需要至少 序号/代码/名称 三列，且代码是 5-6 位数字
     if (cells.length < 3) continue
     const code = cells[1] ?? ''
     if (!/^\d{5,6}$/.test(code)) continue

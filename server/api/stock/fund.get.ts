@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
     return await withDbCache(`stock:fund:${code}:${topline}`, 30 * 60_000, async () => {
       const [holdings, quote, basic] = await Promise.all([
         fetchFundHoldings(code, topline),
-        fetchQuote(`0.${code}`, 'FUND').catch(() => null),
+        fetchQuote(code, 'FUND').catch(() => null),
         searchSecurities(code, 3).catch(() => [])
       ])
 

@@ -1,7 +1,7 @@
 /**
- * GET /api/stock/kline?secid=1.600519&period=day|week|month&limit=120
+ * GET /api/stock/kline?symbol=sh600519&period=day|week|month&limit=120
  *
- * 点开某只股票后的 K 线数据。secid 由搜索接口给出（如 1.600519 / 116.00700 / 105.AAPL）。
+ * 点开某只股票后的 K 线数据。symbol 由搜索接口给出（如 sh600519 / hk00700 / usAAPL）。
  * 同时返回最新报价，前端可省一次请求。
  *
  * 缓存分两层，因为两者变化频率差一个数量级：
@@ -14,14 +14,14 @@ import { fetchKline, fetchQuote } from '../../utils/stock'
 
 export default defineEventHandler(async (event) => {
   const q = getQuery(event)
-  const secid = String(q.secid || '').trim()
+  const symbol = String(q.symbol || q.secid || '').trim()
   const periodRaw = String(q.period || 'day').toLowerCase()
   const period = (['day', 'week', 'month'].includes(periodRaw) ? periodRaw : 'day') as 'day' | 'week' | 'month'
   const limit = Math.min(Math.max(Number(q.limit) || 120, 20), 400)
 
-  if (!secid) {
+  if (!symbol) {
     setResponseStatus(event, 400)
-    return { ok: false, error: '缺少 secid' }
+    return { ok: false, error: '缺少 symbol' }
   }
 
   setHeader(event, 'Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
@@ -31,18 +31,18 @@ export default defineEventHandler(async (event) => {
 
   try {
     const [points, quote] = await Promise.all([
-      withDbCache(`stock:kline:${secid}:${period}:${limit}`, klineTtl, () => fetchKline(secid, period, limit)),
-      // 与 list 接口共用报价缓存键，避免同一只股票多打一次上游
-      withDbCache(`stock:quote:${secid}`, 30_000, () => fetchQuote(secid))
+      withDbCache(`stock:kline:${symbol}:${period}:${limit}`, klineTtl, () => fetchKline(symbol, period, limit)),
+      // 报价与 K 线解耦缓存：报价 30 秒一变，K 线一天基本不变
+      withDbCache(`stock:quote:${symbol}`, 30_000, () => fetchQuote(symbol))
     ])
 
     if (!points.length && !quote) {
-      return { ok: false, secid, period, points: [], quote: null, error: '该标的暂无数据' }
+      return { ok: false, symbol, period, points: [], quote: null, error: '该标的暂无数据' }
     }
 
     return {
       ok: true,
-      secid,
+      symbol,
       period,
       quote,
       points,

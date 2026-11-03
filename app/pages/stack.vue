@@ -11,7 +11,7 @@
 interface Quote {
   code: string
   name: string
-  secid: string
+  symbol: string
   price: number
   changePct: number
   changeAmt: number
@@ -30,7 +30,7 @@ interface SearchItem {
   code: string
   name: string
   market: 'A' | 'HK' | 'US' | 'FUND' | 'INDEX' | 'OTHER'
-  secid: string
+  symbol: string
   typeName: string
 }
 
@@ -103,7 +103,7 @@ const searchError = ref('')
 
 /** K线弹层 */
 const detail = ref<{
-  secid: string
+  symbol: string
   title: string
   period: 'day' | 'week' | 'month'
   quote: Quote | null
@@ -279,13 +279,13 @@ function pickResult(item: SearchItem) {
   if (item.market === 'FUND') {
     void openFund(item.code, item.name)
   } else {
-    void openDetail(item.secid, item.name, item.market)
+    void openDetail(item.symbol, item.name, item.market)
   }
 }
 
 /* ---------- K线 ---------- */
-async function openDetail(secid: string, name: string, market = 'A', period: 'day' | 'week' | 'month' = 'day') {
-  detail.value = { secid, title: name || secid, period, quote: null, points: [] }
+async function openDetail(symbol: string, name: string, market = 'A', period: 'day' | 'week' | 'month' = 'day') {
+  detail.value = { symbol, title: name || symbol, period, quote: null, points: [] }
   klineLoading.value = true
   try {
     const res = await $fetch<{
@@ -293,7 +293,7 @@ async function openDetail(secid: string, name: string, market = 'A', period: 'da
       quote: Quote | null
       points: KlinePoint[]
       error?: string
-    }>('/api/stock/kline', { query: { secid, period, limit: 120 } })
+    }>('/api/stock/kline', { query: { symbol, period, limit: 120 } })
     if (detail.value) {
       detail.value.quote = res.quote ?? null
       detail.value.points = res.points ?? []
@@ -310,7 +310,7 @@ async function openDetail(secid: string, name: string, market = 'A', period: 'da
 async function switchPeriod(p: 'day' | 'week' | 'month') {
   if (!detail.value) return
   const d = detail.value
-  await openDetail(d.secid, d.title, d.quote?.market ?? 'A', p)
+  await openDetail(d.symbol, d.title, d.quote?.market ?? 'A', p)
 }
 
 /* ---------- 基金持仓 ---------- */
@@ -525,7 +525,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
       <div v-if="searchResults.length" class="result-grid">
         <button
           v-for="r in searchResults"
-          :key="r.secid + r.market"
+          :key="r.symbol + r.market"
           class="result"
           @click="pickResult(r)"
         >
@@ -587,7 +587,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
 
         <h3 class="sec-title">涨幅榜</h3>
         <div class="quote-list">
-          <button v-for="q in gainers" :key="q.secid" class="quote-row" @click="openDetail(q.secid, q.name, 'A')">
+          <button v-for="q in gainers" :key="q.symbol" class="quote-row" @click="openDetail(q.symbol, q.name, 'A')">
             <span class="q-left">
               <span class="q-name">{{ q.name }}</span>
               <span class="q-code">{{ q.code }}</span>
@@ -608,7 +608,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
       <section v-else-if="tab === 'HK'" class="panel-inner">
         <h3 class="sec-title">港股热门 <span class="hint">上游批量接口不可用，展示固定龙头池</span></h3>
         <div class="quote-list">
-          <button v-for="q in hkList" :key="q.secid" class="quote-row" @click="openDetail(q.secid, q.name, 'HK')">
+          <button v-for="q in hkList" :key="q.symbol" class="quote-row" @click="openDetail(q.symbol, q.name, 'HK')">
             <span class="q-left">
               <span class="q-name">{{ q.name }}</span>
               <span class="q-code">{{ q.code }}</span>
@@ -630,7 +630,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
       <section v-else-if="tab === 'US'" class="panel-inner">
         <h3 class="sec-title">美股热门 <span class="hint">上游批量接口不可用，展示固定龙头池</span></h3>
         <div class="quote-list">
-          <button v-for="q in usList" :key="q.secid" class="quote-row" @click="openDetail(q.secid, q.name, 'US')">
+          <button v-for="q in usList" :key="q.symbol" class="quote-row" @click="openDetail(q.symbol, q.name, 'US')">
             <span class="q-left">
               <span class="q-name">{{ q.name }}</span>
               <span class="q-code">{{ q.code }}</span>
@@ -792,7 +792,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
           <div>
             <h2>{{ detail.title }}</h2>
             <p class="m-sub">
-              <span>{{ detail.secid }}</span>
+              <span>{{ detail.symbol }}</span>
               <template v-if="detail.quote">
                 <span class="m-price">{{ fmt(detail.quote.price) }}</span>
                 <span :class="cls(detail.quote.changePct)">{{ pctText(detail.quote.changePct) }}</span>

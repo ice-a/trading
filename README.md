@@ -21,7 +21,7 @@
 | `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `trending_repos` |
 | `/github` | 查任意 GitHub 用户的公开仓库 | GitHub 公开 API |
 | `/avatar` | 个性头像生成器（seed 可复现、4 种风格、导出 PNG） | 纯前端 SVG |
-| `/stack` | 行情台：热门板块 / 热门股票 / K线 / 基金持仓 / 我的持仓 | 东方财富公开接口 + `portfolio_trades` |
+| `/stack` | 行情台：热门板块 / 热门股票 / K线 / 基金持仓 / 我的持仓 | 腾讯财经 + 新浪财经 + `portfolio_trades` |
 | `/history` | 历史榜单时间线 + 当日完整榜单 | `trending_repos` |
 
 > 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）。
@@ -233,7 +233,7 @@ pm2 save && pm2 startup
 | GET | `/api/stock/hot` | A股涨幅榜 + 行业板块 |
 | GET | `/api/stock/list?market=hk\|us` | 港股 / 美股热门 |
 | GET | `/api/stock/search?q=` | 搜股票 / 港股 / 美股 / 基金 |
-| GET | `/api/stock/kline?secid=` | K 线（日/周/月） |
+| GET | `/api/stock/kline?symbol=` | K 线（日/周/月），symbol 形如 sh600519 / hk00700 / usAAPL |
 | GET | `/api/stock/fund?code=` | 基金前十重仓 |
 | GET/POST | `/api/stock/portfolio` | 持仓账本（user + key） |
 | GET | `/api/hitokoto` | 一言 |
