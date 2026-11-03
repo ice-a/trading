@@ -142,10 +142,13 @@ export async function saveFxRate(currency: Currency, cnyRate: number): Promise<v
 /* ---------- 账本鉴权 ---------- */
 
 /**
- * 校验 user+key 是否属于同一个账本。
- * 首次写入时自动"认领"（该 user 名下还没有 key 就绑定这个 key 的哈希）。
+ * 校验 user+key 是否属于同一个账本；**首次访问时自动创建**。
+ *
+ * 之前的实现把「读」和「建」分成两步（GET 只 verify、POST 才 claim），
+ * 结果是新用户第一次点进「我的持仓」必然 403 —— 库里还没有这个 user。
+ * 现在统一走 claim：不存在就建，存在就校验，读写行为一致。
  */
-export async function claimLedger(user: string, key: string): Promise<{ ok: boolean; error?: string }> {
+export async function claimLedger(user: string, key: string): Promise<{ ok: boolean; error?: string; created?: boolean }> {
   const u = user.trim()
   const k = key.trim()
   if (!u || !k) return { ok: false, error: 'user 和 key 都不能为空' }
@@ -160,14 +163,18 @@ export async function claimLedger(user: string, key: string): Promise<{ ok: bool
     return { ok: true }
   }
 
+  const now = new Date().toISOString()
   await sqlRun(
     'insert into portfolios (user, key_hash, created_at, updated_at) values (?,?,?,?)',
-    [u, keyHash, new Date().toISOString(), new Date().toISOString()]
+    [u, keyHash, now, now]
   )
-  return { ok: true }
+  return { ok: true, created: true }
 }
 
-/** 读取时只校验，不自动认领（避免别人抢先占你的 user） */
+/**
+ * 只做校验、不创建。仅用于「确认某 user 是否已被占用」这类判断；
+ * /api/stock/portfolio 的读写都改用 claimLedger（含首次创建）。
+ */
 export async function verifyLedger(user: string, key: string): Promise<boolean> {
   const existing = await sqlFirst<{ key_hash: string }>('select key_hash from portfolios where user = ?', [
     user.trim()

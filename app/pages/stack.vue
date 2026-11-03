@@ -123,6 +123,7 @@ const positions = ref<Position[]>([])
 const trades = ref<Trade[]>([])
 const fxRates = ref<FxRate[]>([])
 const portfolioError = ref('')
+const portfolioNote = ref('')
 const history = ref<string[]>([])
 
 /** 新增记录表单 */
@@ -351,6 +352,7 @@ async function unlock() {
   try {
     const res = await $fetch<{
       ok: boolean
+      created?: boolean
       trades?: Trade[]
       positions?: Position[]
       fx?: FxRate[]
@@ -365,6 +367,13 @@ async function unlock() {
     positions.value = res.positions ?? []
     fxRates.value = res.fx ?? []
     unlocked.value = true
+
+    // 首次进入自动建账本，给个确认提示（否则用户不知道自己已经"开户"了）
+    if (res.created) {
+      portfolioNote.value = '已为你创建账本，密钥已记住本机，下次打开自动进入'
+      window.setTimeout(() => (portfolioNote.value = ''), 5000)
+    }
+
     void loadHistory()
   } catch (e) {
     portfolioError.value = e instanceof Error ? e.message : String(e)
@@ -663,6 +672,7 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
           <button class="pill-btn primary" @click="unlock">{{ unlocked ? '刷新' : '进入账本' }}</button>
         </div>
         <p v-if="portfolioError" class="err">{{ portfolioError }}</p>
+        <p v-if="portfolioNote" class="note">{{ portfolioNote }}</p>
         <p class="cred-hint">
           账本按「用户 + 密钥」隔离，密钥只在本机保存与校验（服务端存哈希）。首次进入会自动创建。
         </p>

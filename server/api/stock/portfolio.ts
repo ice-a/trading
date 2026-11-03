@@ -21,7 +21,6 @@ import {
   listTrades,
   saveFxRate,
   updateTrade,
-  verifyLedger,
   type Currency,
   type TradeInput
 } from '../../utils/portfolio'
@@ -40,10 +39,16 @@ export default defineEventHandler(async (event) => {
       return { ok: false, error: '缺少 user 或 key' }
     }
 
-    const valid = await verifyLedger(user, key)
-    if (!valid) {
+    /**
+     * 读写统一走 claimLedger：
+     *   账本不存在 → 首次访问自动创建（否则新用户永远 403）
+     *   账本已存在 → 校验 key 是否匹配
+     * 这样「进入账本」和「记录一笔」的鉴权行为一致，不会出现“先点进去被拒”的死循环。
+     */
+    const claim = await claimLedger(user, key)
+    if (!claim.ok) {
       setResponseStatus(event, 403)
-      return { ok: false, error: 'key 不匹配，或该 user 还没有账本' }
+      return { ok: false, error: claim.error || 'key 与已有账本不匹配' }
     }
 
     if (q.history) {
@@ -54,6 +59,7 @@ export default defineEventHandler(async (event) => {
     return {
       ok: true,
       user,
+      created: Boolean(claim.created),
       trades,
       positions: buildPositions(trades),
       fx: rates
