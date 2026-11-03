@@ -115,7 +115,16 @@ export interface Sector {
 /* ------------------------------------------------------------------ */
 
 /** 腾讯搜索的 market 前缀 → 我们的 Market */
-function marketOf(prefix: string): Market {
+/**
+ * 腾讯搜索的 market 前缀 → 我们的 Market。
+ *
+ * 注意：场内基金（LOF/ETF）的前缀和 A股一样是 sz/sh，
+ * 只能靠类型码区分（实测 161131 返回 sz~161131~易方达科润LOF~…~LOF）。
+ */
+function marketOf(prefix: string, typeCode?: string): Market {
+  const t = (typeCode ?? '').toUpperCase()
+  if (t === 'LOF' || t === 'ETF' || t === 'FUND' || t === 'JJ') return 'FUND'
+
   switch (prefix) {
     case 'sh':
     case 'sz':
@@ -210,10 +219,23 @@ export async function searchSecurities(input: string, count = 10): Promise<Searc
     const [prefix, symbol, name, , typeCode] = p.split('~')
     if (!prefix || !symbol) continue
 
-    const market = marketOf(prefix)
+    const market = marketOf(prefix, typeCode)
     // 指数等不提供 K 线的类型先收进来，前端会按 market 分流
+    const t = (typeCode ?? '').toUpperCase()
     const typeName =
-      typeCode === 'ZS' ? '指数' : market === 'FUND' ? '基金' : market === 'HK' ? '港股' : market === 'US' ? '美股' : 'A股'
+      t === 'ZS'
+        ? '指数'
+        : t === 'LOF'
+          ? 'LOF 基金'
+          : t === 'ETF'
+            ? 'ETF 基金'
+            : market === 'FUND'
+              ? '基金'
+              : market === 'HK'
+                ? '港股'
+                : market === 'US'
+                  ? '美股'
+                  : 'A股'
 
     /**
      * 腾讯搜索里的美股符号是 "aapl.oq"（带交易所后缀），但实时接口只认 "usAAPL"。

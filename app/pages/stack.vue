@@ -88,6 +88,17 @@ interface Position {
   quoteMissing?: boolean
 }
 
+interface CurrencyBucket {
+  currency: string
+  cost: number
+  marketValue: number
+  unrealized: number
+  unrealizedPct: number
+  realized: number
+  holdingCount: number
+  pricedCount: number
+}
+
 interface PortfolioSummary {
   totalCostCny: number
   totalMarketValueCny: number
@@ -145,6 +156,11 @@ const fxRates = ref<FxRate[]>([])
 const portfolioError = ref('')
 const portfolioNote = ref('')
 const summary = ref<PortfolioSummary | null>(null)
+const byCurrency = ref<CurrencyBucket[]>([])
+
+/** 币种符号与名称 */
+const CUR_SIGN: Record<string, string> = { CNY: '¥', HKD: 'HK$', USD: 'US$' }
+const CUR_NAME: Record<string, string> = { CNY: '人民币', HKD: '港币', USD: '美元' }
 const history = ref<string[]>([])
 
 /** 新增记录表单 */
@@ -378,6 +394,7 @@ async function unlock() {
       positions?: Position[]
       fx?: FxRate[]
       summary?: PortfolioSummary
+      byCurrency?: CurrencyBucket[]
       error?: string
     }>('/api/stock/portfolio', { query: { user: userName.value.trim(), key: userKey.value.trim() } })
     if (!res.ok) {
@@ -389,6 +406,7 @@ async function unlock() {
     positions.value = res.positions ?? []
     fxRates.value = res.fx ?? []
     summary.value = res.summary ?? null
+    byCurrency.value = res.byCurrency ?? []
     unlocked.value = true
 
     // 首次进入自动建账本，给个确认提示（否则用户不知道自己已经"开户"了）
@@ -420,6 +438,92 @@ async function post(body: Record<string, unknown>) {
     method: 'POST',
     body: { user: userName.value.trim(), key: userKey.value.trim(), ...body }
   })
+}
+
+/**
+ * 代码 → 名称自动带出。
+ *
+ * 用户只需要敲代码（600519 / 00700 / AAPL / 161131），这里用搜索接口反查名称，
+ * 同时把市场与币种一并推断出来（省得手选）。
+ * 防抖 600ms，避免每敲一个字符都打一次接口。
+ */
+const resolving = ref(false)
+const resolveError = ref('')
+let resolveTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 从代码形态推断市场（用户没选时用） */
+function guessMarket(code: string): 'A' | 'HK' | 'US' | 'FUND' {
+  const c = code.trim().toUpperCase()
+  if (/^[A-Z]{1,5}([.][A-Z])?$/.test(c)) return 'US' // AAPL / BRK.B
+  if (/^\d{5}$/.test(c)) return 'HK' // 00700
+  if (/^\d{6}$/.test(c)) return 'A' // 600519 / 000001
+  return 'A'
+}
+
+/** 市场 → 默认币种 */
+const CURRENCY_OF: Record<string, 'CNY' | 'HKD' | 'USD'> = {
+  A: 'CNY',
+  FUND: 'CNY',
+  HK: 'HKD',
+  US: 'USD'
+}
+
+async function resolveName() {
+  const code = form.code.trim()
+  if (!code) return
+
+  // 代码变化后先按形态猜市场/币种，用户仍可手动改
+  if (!form.market || form.market === 'A') {
+    const g = guessMarket(code)
+    form.market = g
+    form.currency = CURRENCY_OF[g] ?? 'CNY'
+  }
+
+  resolving.value = true
+  resolveError.value = ''
+  try {
+    const res = await $fetch<{ ok: boolean; items: SearchItem[] }>('/api/stock/search', {
+      query: { q: code, count: 5 }
+    })
+    const items = res.items ?? []
+    // 优先精确匹配代码，其次第一条
+    const hit =
+      items.find((i) => i.code.replace(/^0+/, '') === code.replace(/^0+/, '')) ?? items[0]
+
+    if (hit) {
+      form.name = hit.name
+      // 搜索比形态猜测更准，以它为准
+      if (hit.market === 'A' || hit.market === 'HK' || hit.market === 'US' || hit.market === 'FUND') {
+        form.market = hit.market
+        form.currency = CURRENCY_OF[hit.market] ?? 'CNY'
+      }
+    } else {
+      resolveError.value = '没找到该代码，请确认后重试（可手动填写名称）'
+      form.name = ''
+    }
+  } catch {
+    resolveError.value = '查询名称失败，可手动填写'
+  } finally {
+    resolving.value = false
+  }
+}
+
+/** 输入时防抖触发 */
+function onCodeInput() {
+  if (resolveTimer) clearTimeout(resolveTimer)
+  resolveTimer = setTimeout(() => void resolveName(), 600)
+}
+
+/** 手选市场时把币种一起带过去，避免「美股记成人民币」这种脏数据 */
+function onMarketChange(m: string) {
+  form.market = m as typeof form.market
+  form.currency = CURRENCY_OF[m] ?? 'CNY'
+}
+
+/** 失焦立即查（不等防抖） */
+function onCodeBlur() {
+  if (resolveTimer) clearTimeout(resolveTimer)
+  if (form.code.trim() && !form.name.trim()) void resolveName()
 }
 
 async function addTrade() {
@@ -701,71 +805,99 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
         </p>
 
         <template v-if="unlocked">
-          <!-- 总览：含实时浮动盈亏 -->
-          <div v-if="summary" class="summary-grid">
-            <div class="sum-card">
-              <span class="sum-label">持仓市值</span>
-              <span class="sum-value">¥ {{ fmt(summary.totalMarketValueCny) }}</span>
-              <span class="sum-sub">成本 ¥ {{ fmt(summary.totalCostCny) }}</span>
-            </div>
-            <div class="sum-card" :class="cls(summary.totalUnrealizedCny)">
-              <span class="sum-label">浮动盈亏</span>
-              <span class="sum-value">
-                {{ summary.totalUnrealizedCny > 0 ? '+' : '' }}{{ fmt(summary.totalUnrealizedCny) }}
-              </span>
-              <span class="sum-sub">{{ pctText(summary.totalUnrealizedPct) }}</span>
-            </div>
-            <div class="sum-card" :class="cls(summary.realizedCny)">
-              <span class="sum-label">已实现盈亏</span>
-              <span class="sum-value">
-                {{ summary.realizedCny > 0 ? '+' : '' }}{{ fmt(summary.realizedCny) }}
-              </span>
-              <span class="sum-sub">累计卖出结算</span>
-            </div>
-            <div class="sum-card">
-              <span class="sum-label">持仓标的</span>
-              <span class="sum-value">{{ summary.holdingCount }}</span>
-              <span class="sum-sub" v-if="summary.pricedCount < summary.holdingCount">
-                {{ summary.holdingCount - summary.pricedCount }} 只暂无报价
-              </span>
-              <span class="sum-sub" v-else>已覆盖实时报价</span>
+          <!-- ===== 分币种总览 ===== -->
+          <div v-if="byCurrency.length" class="cur-board">
+            <div v-for="b in byCurrency" :key="b.currency" class="cur-col" :class="cls(b.unrealized)">
+              <header class="cur-head">
+                <span class="cur-sign">{{ CUR_SIGN[b.currency] || b.currency }}</span>
+                <span class="cur-name">{{ CUR_NAME[b.currency] || b.currency }}</span>
+                <span class="cur-count">{{ b.holdingCount }} 只</span>
+              </header>
+
+              <div class="cur-main">
+                <span class="cur-label">浮动盈亏</span>
+                <span class="cur-pnl">
+                  {{ b.unrealized > 0 ? '+' : '' }}{{ fmt(b.unrealized) }}
+                  <em>{{ pctText(b.unrealizedPct) }}</em>
+                </span>
+              </div>
+
+              <dl class="cur-detail">
+                <div>
+                  <dt>市值</dt>
+                  <dd>{{ fmt(b.marketValue) }}</dd>
+                </div>
+                <div>
+                  <dt>成本</dt>
+                  <dd>{{ fmt(b.cost) }}</dd>
+                </div>
+                <div>
+                  <dt>已实现</dt>
+                  <dd :class="cls(b.realized)">{{ fmt(b.realized) }}</dd>
+                </div>
+              </dl>
+
+              <p v-if="b.pricedCount < b.holdingCount" class="cur-warn">
+                {{ b.holdingCount - b.pricedCount }} 只无报价
+              </p>
             </div>
           </div>
 
-          <!-- 持仓表：含现价 / 浮动盈亏 -->
+          <!-- ===== 折算总览（跨币种可比） ===== -->
+          <div v-if="summary" class="total-bar">
+            <span class="tb-item">
+              <em>合计成本</em>
+              <b>¥ {{ fmt(summary.totalCostCny) }}</b>
+            </span>
+            <span class="tb-item">
+              <em>合计市值</em>
+              <b>¥ {{ fmt(summary.totalMarketValueCny) }}</b>
+            </span>
+            <span class="tb-item" :class="cls(summary.totalUnrealizedCny)">
+              <em>合计浮盈</em>
+              <b>
+                {{ summary.totalUnrealizedCny > 0 ? '+' : '' }}{{ fmt(summary.totalUnrealizedCny) }}
+                <i>{{ pctText(summary.totalUnrealizedPct) }}</i>
+              </b>
+            </span>
+            <span class="tb-item" :class="cls(summary.realizedCny)">
+              <em>已实现</em>
+              <b>{{ summary.realizedCny > 0 ? '+' : '' }}{{ fmt(summary.realizedCny) }}</b>
+            </span>
+          </div>
+
+          <!-- ===== 持仓明细 ===== -->
           <h3 class="sec-title">当前持仓</h3>
           <div v-if="positions.length" class="pos-table">
             <div class="pos-head">
               <span>标的</span>
-              <span>现价</span>
-              <span>数量</span>
-              <span>成本</span>
-              <span>市值</span>
-              <span>浮动盈亏</span>
+              <span class="num">现价</span>
+              <span class="num">数量</span>
+              <span class="num">成本</span>
+              <span class="num">市值</span>
+              <span class="num">浮动盈亏</span>
             </div>
             <div v-for="p in positions" :key="p.code + p.market" class="pos-row">
               <span class="pos-name">
-                {{ p.name || p.code }}
-                <em class="pos-code">{{ p.code }} · {{ p.market }}</em>
+                <b>{{ p.name || p.code }}</b>
+                <em class="pos-code">{{ p.code }} · {{ CUR_NAME[p.currency] || p.currency }}</em>
               </span>
-              <span class="pos-price">
+              <span class="num pos-price">
                 <template v-if="p.price != null">
-                  {{ fmt(p.price) }}
-                  <em class="pos-pct" :class="cls(p.changePct ?? 0)">{{ pctText(p.changePct ?? 0) }}</em>
+                  <b>{{ fmt(p.price) }}</b>
+                  <em :class="cls(p.changePct ?? 0)">{{ pctText(p.changePct ?? 0) }}</em>
                 </template>
-                <em v-else class="pos-code">暂无</em>
+                <em v-else class="muted">—</em>
               </span>
-              <span>{{ p.quantity }}</span>
-              <span>{{ p.currency }} {{ fmt(p.avgCost) }}</span>
-              <span>{{ p.currency }} {{ fmt(p.marketValue ?? 0) }}</span>
-              <span class="pos-pnl" :class="cls(p.unrealized ?? 0)">
+              <span class="num">{{ p.quantity }}</span>
+              <span class="num muted">{{ fmt(p.avgCost) }}</span>
+              <span class="num">{{ fmt(p.marketValue ?? 0) }}</span>
+              <span class="num pos-pnl" :class="cls(p.unrealized ?? 0)">
                 <template v-if="p.unrealized != null">
-                  {{ p.unrealized > 0 ? '+' : '' }}{{ fmt(p.unrealized) }}
-                  <em class="pos-pct" :class="cls(p.unrealizedPct ?? 0)">
-                    ({{ pctText(p.unrealizedPct ?? 0) }})
-                  </em>
+                  <b>{{ p.unrealized > 0 ? '+' : '' }}{{ fmt(p.unrealized) }}</b>
+                  <em>{{ pctText(p.unrealizedPct ?? 0) }}</em>
                 </template>
-                <em v-else class="pos-code">未报价</em>
+                <em v-else class="muted">未报价</em>
               </span>
             </div>
           </div>
@@ -774,15 +906,30 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
           <!-- 新增记录 -->
           <h3 class="sec-title">记一笔</h3>
           <div class="form-grid">
-            <label>代码<input v-model="form.code" placeholder="600519 / 00700 / AAPL / 161131" /></label>
-            <label>名称<input v-model="form.name" placeholder="可选" /></label>
+            <label class="code-field">
+              代码
+              <input
+                v-model="form.code"
+                placeholder="600519 / 00700 / AAPL / 161131"
+                spellcheck="false"
+                @input="onCodeInput"
+                @blur="onCodeBlur"
+              />
+              <span v-if="resolving" class="field-tip">查询中…</span>
+              <span v-else-if="form.name" class="field-tip ok">✓ {{ form.name }}</span>
+              <span v-else-if="resolveError" class="field-tip err">{{ resolveError }}</span>
+            </label>
+            <label>
+              名称
+              <input v-model="form.name" placeholder="输入代码后自动带出，可手改" />
+            </label>
             <label>
               市场
-              <select v-model="form.market">
-                <option value="A">A股</option>
-                <option value="HK">港股</option>
-                <option value="US">美股</option>
-                <option value="FUND">基金</option>
+              <select :value="form.market" @change="onMarketChange(($event.target as HTMLSelectElement).value)">
+                <option value="A">A股（人民币）</option>
+                <option value="HK">港股（港币）</option>
+                <option value="US">美股（美元）</option>
+                <option value="FUND">基金（人民币）</option>
               </select>
             </label>
             <label>
@@ -1301,57 +1448,206 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
   color: #e5484d;
 }
 
-/* ---------- 持仓总览卡片 ---------- */
-.summary-grid {
+/* ---------- 分币种总览 ---------- */
+.cur-board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 10px;
-  margin: 14px 0 4px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 16px 0 12px;
 }
 
-.sum-card {
-  padding: 12px 14px;
+.cur-col {
+  position: relative;
+  padding: 14px 16px 12px;
   border: 1px solid var(--line);
-  border-radius: 11px;
-  background: linear-gradient(180deg, #fcfdff 0%, #f7faff 100%);
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+  overflow: hidden;
+}
+
+/* 左侧状态色条：涨红 / 跌绿 */
+.cur-col::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #d0d5dd;
+}
+
+.cur-col.up::before {
+  background: #e5484d;
+}
+
+.cur-col.down::before {
+  background: #12a594;
+}
+
+.cur-head {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
 }
 
-.sum-card.up {
-  border-color: #fbd5d5;
-  background: linear-gradient(180deg, #fffafa 0%, #fff3f3 100%);
+.cur-sign {
+  display: grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border-radius: 7px;
+  background: #f2f4f7;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475467;
 }
 
-.sum-card.down {
-  border-color: #c8ebe5;
-  background: linear-gradient(180deg, #f9fefd 0%, #effaf8 100%);
-}
-
-.sum-label {
-  font-size: 11px;
+.cur-name {
+  font-size: 12px;
   color: #667085;
 }
 
-.sum-value {
-  font-size: 19px;
+.cur-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #98a2b3;
+}
+
+.cur-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.cur-label {
+  font-size: 11px;
+  color: #98a2b3;
+}
+
+.cur-pnl {
+  font-size: 22px;
   font-weight: 800;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.5px;
   color: #101828;
 }
 
-.sum-card.up .sum-value {
+.cur-col.up .cur-pnl {
   color: #e5484d;
 }
 
-.sum-card.down .sum-value {
+.cur-col.down .cur-pnl {
   color: #12a594;
 }
 
-.sum-sub {
-  font-size: 11px;
+.cur-pnl em {
+  margin-left: 6px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.cur-detail {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px dashed #eaecf0;
+}
+
+.cur-detail div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cur-detail dt {
+  font-size: 10.5px;
   color: #98a2b3;
+}
+
+.cur-detail dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #344054;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cur-warn {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  color: #b54708;
+}
+
+/* ---------- 折算合计条 ---------- */
+.total-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+  padding: 11px 16px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #f8fafc;
+}
+
+.tb-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.tb-item em {
+  font-size: 11px;
+  font-style: normal;
+  color: #667085;
+}
+
+.tb-item b {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #101828;
+}
+
+.tb-item b i {
+  margin-left: 4px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.tb-item.up b {
+  color: #e5484d;
+}
+
+.tb-item.down b {
+  color: #12a594;
+}
+
+/* ---------- 表单小提示 ---------- */
+.code-field {
+  position: relative;
+}
+
+.field-tip {
+  font-size: 10.5px;
+  color: #98a2b3;
+}
+
+.field-tip.ok {
+  color: #12a594;
+}
+
+.field-tip.err {
+  color: #e5484d;
 }
 
 .form-grid {

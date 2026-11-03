@@ -96,6 +96,40 @@ export default defineEventHandler(async (event) => {
       return acc
     }, { CNY: 1 })
 
+    /**
+     * 分币种汇总：人民币 / 港币 / 美元各自独立统计，不混算。
+     * 跨币种可比时再看 summary.cny（全部折人民币）。
+     */
+    const byCurrency: Record<
+      string,
+      {
+        currency: string
+        cost: number
+        marketValue: number
+        unrealized: number
+        unrealizedPct: number
+        realized: number
+        holdingCount: number
+        pricedCount: number
+      }
+    > = {}
+
+    const bucket = (c: string) => {
+      if (!byCurrency[c]) {
+        byCurrency[c] = {
+          currency: c,
+          cost: 0,
+          marketValue: 0,
+          unrealized: 0,
+          unrealizedPct: 0,
+          realized: 0,
+          holdingCount: 0,
+          pricedCount: 0
+        }
+      }
+      return byCurrency[c]!
+    }
+
     const rows = positions.map((p) => {
       const symbol = symbolForPosition(p.market, p.code)
       const quote = symbol ? quoteMap.get(symbol.toLowerCase()) : undefined
@@ -126,6 +160,21 @@ export default defineEventHandler(async (event) => {
       }
     })
 
+    for (const r of rows) {
+      const b = bucket(r.currency)
+      b.cost += r.totalCost
+      b.realized += r.realized
+      b.holdingCount++
+      if (r.marketValue !== null && r.unrealized !== null) {
+        b.marketValue += r.marketValue
+        b.unrealized += r.unrealized
+        b.pricedCount++
+      }
+    }
+    for (const b of Object.values(byCurrency)) {
+      b.unrealizedPct = b.cost > 0 ? (b.unrealized / b.cost) * 100 : 0
+    }
+
     // 汇总（只统计能拿到报价的标的，另给出覆盖数量便于前端提示）
     const priced = rows.filter((r) => r.unrealizedCny !== null)
     const totalUnrealizedCny = priced.reduce((s, r) => s + (r.unrealizedCny ?? 0), 0)
@@ -148,7 +197,9 @@ export default defineEventHandler(async (event) => {
         holdingCount: rows.length,
         /** 已实现盈亏折人民币 */
         realizedCny: rows.reduce((s, r) => s + r.realized * (fx[r.currency] ?? 1), 0)
-      }
+      },
+      /** 分币种明细：人民币 / 港币 / 美元各算各的 */
+      byCurrency: Object.values(byCurrency).sort((a, b) => b.cost - a.cost)
     }
   }
 
