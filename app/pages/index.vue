@@ -42,7 +42,6 @@ const bundleData = useCachedData<BundleResponse>(
     }),
   { ttl: 300_000 }
 )
-if (import.meta.server) await bundleData
 const { pending, error, refresh } = bundleData
 
 /** 当前周期的数据：直接从 bundle 里切，不发任何请求 */
@@ -57,7 +56,6 @@ const hitokotoData = useCachedData(
   () => $fetch('/api/hitokoto'),
   { ttl: 30_000 }
 )
-if (import.meta.server) await hitokotoData
 const { data: hitokoto } = hitokotoData
 
 /** URL 同步（刷新/分享能还原到同一页同一天） */

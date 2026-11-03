@@ -40,7 +40,6 @@ const overviewData = useCachedData(
   () => $fetch<HistoryOverview>('/api/history'),
   { ttl: 120_000 }
 )
-if (import.meta.server) await overviewData
 const { data: overview, pending: loadingOverview } = overviewData
 
 const days = computed(() => overview.value?.days ?? [])
@@ -69,7 +68,6 @@ const detailData = useCachedData(
     }),
   { ttl: 60_000 }
 )
-if (import.meta.server) await detailData
 const { data: detail, pending } = detailData
 
 /**
