@@ -24,6 +24,8 @@ import {
   type Currency,
   type TradeInput
 } from '../../utils/portfolio'
+import { fetchQuotes, symbolForPosition } from '../../utils/stock'
+import { withDbCache } from '../../utils/cache'
 
 export default defineEventHandler(async (event) => {
   const method = getMethod(event)
@@ -56,13 +58,97 @@ export default defineEventHandler(async (event) => {
     }
 
     const [trades, rates] = await Promise.all([listTrades(user), listFxRates()])
+    const positions = buildPositions(trades)
+
+    /**
+     * 实时浮动盈亏：现价 × 数量 − 成本。
+     *
+     * 用 withDbCache 的报价缓存（30 秒）批量取现价，一次请求拿全部持仓标的，
+     * 不额外增加往返；拿不到价格的标的（停牌/退市/代码错）标记 quoteMissing，
+     * 前端显示"暂无报价"而不是直接算成 0 亏损。
+     */
+    const held = positions.filter((p) => p.quantity > 0)
+    const quoteMap = new Map<string, { price: number; changePct: number; name: string }>()
+
+    if (held.length) {
+      const symbols = held
+        .map((p) => symbolForPosition(p.market, p.code))
+        .filter((s): s is string => Boolean(s))
+
+      if (symbols.length) {
+        try {
+          const quoteItems = await withDbCache(
+            `stock:quotes:${symbols.join(',')}`,
+            30_000,
+            () => fetchQuotes(symbols.map((symbol) => ({ symbol })))
+          )
+          for (const q of quoteItems) {
+            quoteMap.set(q.symbol.toLowerCase(), { price: q.price, changePct: q.changePct, name: q.name })
+          }
+        } catch {
+          /* 报价失败不影响持仓展示，只是没有浮盈 */
+        }
+      }
+    }
+
+    const fx = rates.reduce<Record<string, number>>((acc, r) => {
+      acc[r.currency] = r.cnyRate
+      return acc
+    }, { CNY: 1 })
+
+    const rows = positions.map((p) => {
+      const symbol = symbolForPosition(p.market, p.code)
+      const quote = symbol ? quoteMap.get(symbol.toLowerCase()) : undefined
+      const price = quote?.price ?? null
+      const rate = fx[p.currency] ?? 1
+
+      // 浮动盈亏只在有现价且仍持仓时才有意义
+      const marketValue = price !== null ? price * p.quantity : null
+      const unrealized = price !== null ? (price * p.quantity - p.totalCost) : null
+
+      return {
+        ...p,
+        symbol: symbol ?? '',
+        price,
+        changePct: quote?.changePct ?? null,
+        /** 现价市值（原币） */
+        marketValue,
+        /** 浮动盈亏（原币） */
+        unrealized,
+        /** 浮动盈亏（人民币，方便跨币种汇总） */
+        unrealizedCny: unrealized !== null ? unrealized * rate : null,
+        /** 现价市值折人民币 */
+        marketValueCny: marketValue !== null ? marketValue * rate : null,
+        /** 浮盈率 % */
+        unrealizedPct:
+          unrealized !== null && p.totalCost > 0 ? (unrealized / p.totalCost) * 100 : null,
+        quoteMissing: quote === undefined
+      }
+    })
+
+    // 汇总（只统计能拿到报价的标的，另给出覆盖数量便于前端提示）
+    const priced = rows.filter((r) => r.unrealizedCny !== null)
+    const totalUnrealizedCny = priced.reduce((s, r) => s + (r.unrealizedCny ?? 0), 0)
+    const totalMarketValueCny = priced.reduce((s, r) => s + (r.marketValueCny ?? 0), 0)
+    const totalCostCny = rows.reduce((s, r) => s + r.totalCost * (fx[r.currency] ?? 1), 0)
+
     return {
       ok: true,
       user,
       created: Boolean(claim.created),
       trades,
-      positions: buildPositions(trades),
-      fx: rates
+      positions: rows,
+      fx: rates,
+      summary: {
+        totalCostCny,
+        totalMarketValueCny,
+        totalUnrealizedCny,
+        totalUnrealizedPct: totalCostCny > 0 ? (totalUnrealizedCny / totalCostCny) * 100 : 0,
+        pricedCount: priced.length,
+        holdingCount: rows.length,
+        /** 已实现盈亏折人民币 */
+        realizedCny: rows.reduce((s, r) => s + r.realized * (fx[r.currency] ?? 1), 0)
+      }
     }
   }
 

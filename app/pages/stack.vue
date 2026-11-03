@@ -76,6 +76,26 @@ interface Position {
   totalFee: number
   trades: number
   lastDate: string
+  /** 后端附带的实时字段 */
+  symbol?: string
+  price?: number | null
+  changePct?: number | null
+  marketValue?: number | null
+  unrealized?: number | null
+  unrealizedCny?: number | null
+  marketValueCny?: number | null
+  unrealizedPct?: number | null
+  quoteMissing?: boolean
+}
+
+interface PortfolioSummary {
+  totalCostCny: number
+  totalMarketValueCny: number
+  totalUnrealizedCny: number
+  totalUnrealizedPct: number
+  pricedCount: number
+  holdingCount: number
+  realizedCny: number
 }
 
 interface FxRate {
@@ -124,6 +144,7 @@ const trades = ref<Trade[]>([])
 const fxRates = ref<FxRate[]>([])
 const portfolioError = ref('')
 const portfolioNote = ref('')
+const summary = ref<PortfolioSummary | null>(null)
 const history = ref<string[]>([])
 
 /** 新增记录表单 */
@@ -356,6 +377,7 @@ async function unlock() {
       trades?: Trade[]
       positions?: Position[]
       fx?: FxRate[]
+      summary?: PortfolioSummary
       error?: string
     }>('/api/stock/portfolio', { query: { user: userName.value.trim(), key: userKey.value.trim() } })
     if (!res.ok) {
@@ -366,6 +388,7 @@ async function unlock() {
     trades.value = res.trades ?? []
     positions.value = res.positions ?? []
     fxRates.value = res.fx ?? []
+    summary.value = res.summary ?? null
     unlocked.value = true
 
     // 首次进入自动建账本，给个确认提示（否则用户不知道自己已经"开户"了）
@@ -678,39 +701,72 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
         </p>
 
         <template v-if="unlocked">
-          <!-- 汇总 -->
-          <div class="summary">
-            <div class="sum-item">
-              <span class="sum-label">持仓成本（折人民币）</span>
-              <span class="sum-value">¥ {{ fmt(totalCostCny) }}</span>
+          <!-- 总览：含实时浮动盈亏 -->
+          <div v-if="summary" class="summary-grid">
+            <div class="sum-card">
+              <span class="sum-label">持仓市值</span>
+              <span class="sum-value">¥ {{ fmt(summary.totalMarketValueCny) }}</span>
+              <span class="sum-sub">成本 ¥ {{ fmt(summary.totalCostCny) }}</span>
             </div>
-            <div class="sum-item">
-              <span class="sum-label">已实现盈亏（折人民币）</span>
-              <span class="sum-value" :class="cls(realizedCny)">
-                {{ realizedCny > 0 ? '+' : '' }}{{ fmt(realizedCny) }}
+            <div class="sum-card" :class="cls(summary.totalUnrealizedCny)">
+              <span class="sum-label">浮动盈亏</span>
+              <span class="sum-value">
+                {{ summary.totalUnrealizedCny > 0 ? '+' : '' }}{{ fmt(summary.totalUnrealizedCny) }}
               </span>
+              <span class="sum-sub">{{ pctText(summary.totalUnrealizedPct) }}</span>
             </div>
-            <div class="sum-item">
+            <div class="sum-card" :class="cls(summary.realizedCny)">
+              <span class="sum-label">已实现盈亏</span>
+              <span class="sum-value">
+                {{ summary.realizedCny > 0 ? '+' : '' }}{{ fmt(summary.realizedCny) }}
+              </span>
+              <span class="sum-sub">累计卖出结算</span>
+            </div>
+            <div class="sum-card">
               <span class="sum-label">持仓标的</span>
-              <span class="sum-value">{{ positions.length }}</span>
+              <span class="sum-value">{{ summary.holdingCount }}</span>
+              <span class="sum-sub" v-if="summary.pricedCount < summary.holdingCount">
+                {{ summary.holdingCount - summary.pricedCount }} 只暂无报价
+              </span>
+              <span class="sum-sub" v-else>已覆盖实时报价</span>
             </div>
           </div>
 
-          <!-- 持仓表 -->
+          <!-- 持仓表：含现价 / 浮动盈亏 -->
           <h3 class="sec-title">当前持仓</h3>
           <div v-if="positions.length" class="pos-table">
             <div class="pos-head">
-              <span>标的</span><span>数量</span><span>均价</span><span>成本</span><span>已实现</span>
+              <span>标的</span>
+              <span>现价</span>
+              <span>数量</span>
+              <span>成本</span>
+              <span>市值</span>
+              <span>浮动盈亏</span>
             </div>
             <div v-for="p in positions" :key="p.code + p.market" class="pos-row">
               <span class="pos-name">
                 {{ p.name || p.code }}
                 <em class="pos-code">{{ p.code }} · {{ p.market }}</em>
               </span>
+              <span class="pos-price">
+                <template v-if="p.price != null">
+                  {{ fmt(p.price) }}
+                  <em class="pos-pct" :class="cls(p.changePct ?? 0)">{{ pctText(p.changePct ?? 0) }}</em>
+                </template>
+                <em v-else class="pos-code">暂无</em>
+              </span>
               <span>{{ p.quantity }}</span>
               <span>{{ p.currency }} {{ fmt(p.avgCost) }}</span>
-              <span>{{ p.currency }} {{ fmt(p.totalCost) }}</span>
-              <span :class="cls(p.realized)">{{ fmt(p.realized) }}</span>
+              <span>{{ p.currency }} {{ fmt(p.marketValue ?? 0) }}</span>
+              <span class="pos-pnl" :class="cls(p.unrealized ?? 0)">
+                <template v-if="p.unrealized != null">
+                  {{ p.unrealized > 0 ? '+' : '' }}{{ fmt(p.unrealized) }}
+                  <em class="pos-pct" :class="cls(p.unrealizedPct ?? 0)">
+                    ({{ pctText(p.unrealizedPct ?? 0) }})
+                  </em>
+                </template>
+                <em v-else class="pos-code">未报价</em>
+              </span>
             </div>
           </div>
           <p v-else class="empty-hint">还没有记录。在下面新增一笔买入。</p>
@@ -1245,75 +1301,56 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
   color: #e5484d;
 }
 
-.summary {
+/* ---------- 持仓总览卡片 ---------- */
+.summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
-  margin: 14px 0;
+  margin: 14px 0 4px;
 }
 
-.sum-item {
+.sum-card {
   padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fbfdff;
+  border-radius: 11px;
+  background: linear-gradient(180deg, #fcfdff 0%, #f7faff 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sum-card.up {
+  border-color: #fbd5d5;
+  background: linear-gradient(180deg, #fffafa 0%, #fff3f3 100%);
+}
+
+.sum-card.down {
+  border-color: #c8ebe5;
+  background: linear-gradient(180deg, #f9fefd 0%, #effaf8 100%);
 }
 
 .sum-label {
-  display: block;
   font-size: 11px;
   color: #667085;
 }
 
 .sum-value {
-  display: block;
-  margin-top: 4px;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
   color: #101828;
 }
 
-.pos-table {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  overflow: hidden;
-  font-size: 12px;
+.sum-card.up .sum-value {
+  color: #e5484d;
 }
 
-.pos-head,
-.pos-row {
-  display: grid;
-  grid-template-columns: 1.6fr 0.8fr 1fr 1.1fr 0.9fr;
-  gap: 8px;
-  padding: 9px 12px;
-  align-items: center;
+.sum-card.down .sum-value {
+  color: #12a594;
 }
 
-.pos-head {
-  background: #fcfdff;
-  border-bottom: 1px solid var(--line);
+.sum-sub {
   font-size: 11px;
-  color: #667085;
-}
-
-.pos-row {
-  border-bottom: 1px solid #f2f4f7;
-}
-
-.pos-row:last-child {
-  border-bottom: 0;
-}
-
-.pos-name {
-  font-weight: 600;
-  color: #101828;
-}
-
-.pos-code {
-  display: block;
-  font-size: 10.5px;
-  font-weight: 400;
-  font-style: normal;
   color: #98a2b3;
 }
 

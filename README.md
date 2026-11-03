@@ -235,7 +235,8 @@ pm2 save && pm2 startup
 | GET | `/api/stock/search?q=` | 搜股票 / 港股 / 美股 / 基金 |
 | GET | `/api/stock/kline?symbol=` | K 线（日/周/月），symbol 形如 sh600519 / hk00700 / usAAPL |
 | GET | `/api/stock/fund?code=` | 基金前十重仓 |
-| GET/POST | `/api/stock/portfolio` | 持仓账本（user + key） |
+| GET | `/api/stock/quotes?symbols=` | 批量报价（持仓浮盈等场景） |
+| GET/POST | `/api/stock/portfolio` | 持仓账本（user + key），含实时浮动盈亏 |
 | GET | `/api/hitokoto` | 一言 |
 | GET | `/api/github-search` · `/api/repos` | GitHub 查询 |
 | POST | `/api/refresh` | 页面按需刷新（1 小时节流，`?force=1`） |

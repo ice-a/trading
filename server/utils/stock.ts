@@ -146,6 +146,29 @@ export function symbolOf(code: string, market: Market): string {
   return `sh${c}`
 }
 
+/**
+ * 持仓记录（market + code）→ 腾讯符号。
+ * 持仓里存的是纯代码（600519 / 00700 / AAPL），这里转成可报价的符号。
+ */
+export function symbolForPosition(market: string, code: string): string | null {
+  const c = code.trim()
+  if (!c) return null
+
+  switch (market) {
+    case 'HK':
+      return `hk${c.padStart(5, '0')}`
+    case 'US':
+      return `us${c.toUpperCase()}`
+    case 'FUND':
+      // 场内基金：1 开头走深市，5 开头走沪市
+      return c.startsWith('5') ? `sh${c}` : `sz${c}`
+    case 'A':
+      return symbolOf(c, 'A')
+    default:
+      return null
+  }
+}
+
 /** 从腾讯符号反推代码（sh600519 → 600519） */
 function codeOfSymbol(symbol: string): { code: string; market: Market } {
   const m = symbol.match(/^([a-z]{2})(.+)$/i)
