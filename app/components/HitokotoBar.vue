@@ -9,9 +9,8 @@ interface Quote {
   source: 'remote' | 'local'
 }
 
-const props = defineProps<{ initial?: Quote | null }>()
-
-const quote = ref<Quote | null>(props.initial ?? null)
+// 常驻在 app.vue 里，不再由页面传入 initial：切页时组件不重建，计时器也不重置
+const quote = ref<Quote | null>(null)
 const fading = ref(false)
 const ticker = ref(0)
 
@@ -81,7 +80,6 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 20px 16px;
-  margin-bottom: 18px;
   border-radius: var(--radius);
   border: 1px solid #e3ebf7;
   background: linear-gradient(100deg, #f7faff 0%, #fbf8ff 55%, #f6fbfa 100%);

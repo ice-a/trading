@@ -230,14 +230,7 @@ useHead({ title: '个性头像' })
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <div class="hero-left">
-        <h1>个性头像</h1>
-        <p>seed 可复现 · 可导出 1024 × 1024 PNG</p>
-      </div>
-    </header>
-
+  <PageShell icon="🎨" title="个性头像" subtitle="seed 可复现 · 可导出 1024 × 1024 PNG">
     <div class="panel">
       <!-- 预览 -->
       <div class="preview" :class="bg">
@@ -292,7 +285,7 @@ useHead({ title: '个性头像' })
         </p>
       </div>
     </div>
-  </div>
+  </PageShell>
 </template>
 
 <style scoped>

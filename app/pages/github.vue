@@ -208,14 +208,12 @@ useHead({ title: 'GitHub' })
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <div class="hero-left">
-        <h1>GitHub</h1>
-        <p>
-          当前查看 <b>{{ currentUser }}</b> 的 <b>{{ repos?.total ?? 0 }}</b> 个公开仓库 · 最近推送优先
-        </p>
-      </div>
+  <PageShell
+    icon="🐙"
+    title="GitHub"
+    :subtitle="`查看 ${currentUser} 的 ${repos?.total ?? 0} 个公开仓库 · 最近推送优先`"
+  >
+    <template #side>
       <a class="pill-btn" href="https://github.com/" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
           <path
@@ -225,129 +223,113 @@ useHead({ title: 'GitHub' })
         </svg>
         打开 GitHub
       </a>
-    </header>
+    </template>
 
-    <!-- 仓库 -->
-    <section class="block">
-      <div class="repo-head">
-        <h2 class="block-title">
-          {{ isSearchMode ? '搜索结果' : 'GitHub 仓库' }}
-          <span class="sub">
-            {{
-              isSearchMode
-                ? `关键词「${searchQuery}」· 共 ${searchResult?.total ?? 0} 个`
-                : `${currentUser} · 最近推送优先`
-            }}
+    <!-- 工具栏：排序 + 刷新（搜索框固定在下方，不改变区块结构） -->
+    <template #actions>
+      <div class="repo-tools">
+        <div class="sort">
+          <button :class="{ on: sortBy === 'pushed' }" @click="sortBy = 'pushed'">最近推送</button>
+          <button :class="{ on: sortBy === 'stars' }" @click="sortBy = 'stars'">最多 Star</button>
+          <button :class="{ on: sortBy === 'name' }" @click="sortBy = 'name'">名称</button>
+        </div>
+        <button class="pill-btn small" :class="{ spinning: reposPending }" @click="reposRefresh()">刷新</button>
+      </div>
+    </template>
+
+    <div class="search">
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"
+        />
+      </svg>
+      <input
+        v-model="searchInput"
+        type="search"
+        placeholder="搜索 GitHub 全站仓库，回车执行（如 react / vue / rust cli）"
+        spellcheck="false"
+        @keyup.enter="doSearch"
+      />
+      <span class="count">
+        {{ isSearchMode ? `${searchResult?.total ?? 0} 个结果` : `${filteredRepos.length} 个` }}
+      </span>
+      <button v-if="isSearchMode" class="search-act ghost" @click="clearSearch">返回</button>
+      <button v-else class="search-act" :disabled="searching" @click="doSearch">
+        {{ searching ? '搜索中…' : '搜索' }}
+      </button>
+    </div>
+
+    <div class="token-row">
+      <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+        <path fill="currentColor" d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z" />
+      </svg>
+      <input
+        v-model="ghToken"
+        type="password"
+        class="token-input"
+        placeholder="可选：填入你自己的 GitHub Token（配额从 10 次/分钟提升到 30 次/分钟）"
+        spellcheck="false"
+        autocomplete="off"
+        @change="saveToken"
+      />
+      <span v-if="ghToken" class="token-state on">已启用</span>
+      <span v-else class="token-state">未填 · 共用公共配额</span>
+      <button v-if="ghToken" class="token-clear" @click="clearToken">清除</button>
+    </div>
+
+    <div v-if="displayError" class="alert">
+      {{ displayError }}
+    </div>
+
+    <div v-else-if="displayLoading && !displayRepos.length" class="search-wait">
+      <span class="spin" />
+      {{ ghToken ? '正在搜索…' : '正在搜索，公共配额紧张时会排队等待…' }}
+    </div>
+
+    <div v-else-if="displayRepos.length" class="repo-grid">
+      <a
+        v-for="r in displayRepos"
+        :key="r.fullName"
+        class="repo-card"
+        :href="r.url"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <header class="rc-head">
+          <span class="rc-name">{{ r.name }}</span>
+          <span v-if="r.fork" class="fork-tag">Fork</span>
+        </header>
+
+        <p class="rc-desc">{{ r.desc || '暂无描述' }}</p>
+
+        <div class="rc-meta">
+          <span v-if="r.language" class="lang">
+            <i class="dot" :style="{ background: colorOf(r.language) }" />
+            {{ r.language }}
           </span>
-        </h2>
-
-        <div class="repo-tools">
-          <div class="sort">
-            <button :class="{ on: sortBy === 'pushed' }" @click="sortBy = 'pushed'">最近推送</button>
-            <button :class="{ on: sortBy === 'stars' }" @click="sortBy = 'stars'">最多 Star</button>
-            <button :class="{ on: sortBy === 'name' }" @click="sortBy = 'name'">名称</button>
-          </div>
-          <button class="pill-btn small" :class="{ spinning: reposPending }" @click="reposRefresh()">刷新</button>
+          <span class="stat">
+            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
+              />
+            </svg>
+            {{ r.stars }}
+          </span>
+          <span class="stat">⑂ {{ r.forks }}</span>
+          <span class="pushed">更新 {{ pushedAgo(r.pushedAt) }}</span>
         </div>
-      </div>
+      </a>
+    </div>
 
-      <div class="search">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"
-          />
-        </svg>
-        <input
-          v-model="searchInput"
-          type="search"
-          placeholder="搜索 GitHub 全站仓库，回车执行（如 react / vue / rust cli）"
-          spellcheck="false"
-          @keyup.enter="doSearch"
-        />
-        <span class="count">{{ isSearchMode ? `${searchResult?.total ?? 0} 个结果` : `${filteredRepos.length} 个` }}</span>
-        <button v-if="isSearchMode" class="search-act ghost" @click="clearSearch">返回</button>
-        <button v-else class="search-act" :disabled="searching" @click="doSearch">
-          {{ searching ? '搜索中…' : '搜索' }}
-        </button>
-      </div>
-
-      <div class="token-row">
-        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-          <path fill="currentColor" d="M8 1a3.5 3.5 0 0 0-3.5 3.5V6H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-.5V4.5A3.5 3.5 0 0 0 8 1Zm2 5H6V4.5a2 2 0 1 1 4 0V6Z" />
-        </svg>
-        <input
-          v-model="ghToken"
-          type="password"
-          class="token-input"
-          placeholder="可选：填入你自己的 GitHub Token（配额从 10 次/分钟提升到 30 次/分钟）"
-          spellcheck="false"
-          autocomplete="off"
-          @change="saveToken"
-        />
-        <span v-if="ghToken" class="token-state on">已启用</span>
-        <span v-else class="token-state">未填 · 共用公共配额</span>
-        <button v-if="ghToken" class="token-clear" @click="clearToken">清除</button>
-      </div>
-
-      <div v-if="displayError" class="alert">
-        {{ displayError }}
-      </div>
-
-      <div v-else-if="displayLoading && !displayRepos.length" class="search-wait">
-        <span class="spin" />
-        {{ ghToken ? '正在搜索…' : '正在搜索，公共配额紧张时会排队等待…' }}
-      </div>
-
-      <div v-else-if="false" class="repo-grid">
-        <div v-for="i in 9" :key="`sk-${i}`" class="repo-card sk">
-          <div class="skeleton" style="width: 45%; height: 13px" />
-          <div class="skeleton" style="width: 85%; height: 10px; margin-top: 10px" />
-        </div>
-      </div>
-
-      <div v-else-if="displayRepos.length" class="repo-grid">
-        <a
-          v-for="r in displayRepos"
-          :key="r.fullName"
-          class="repo-card"
-          :href="r.url"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <header class="rc-head">
-            <span class="rc-name">{{ r.name }}</span>
-            <span v-if="r.fork" class="fork-tag">Fork</span>
-          </header>
-
-          <p class="rc-desc">{{ r.desc || '暂无描述' }}</p>
-
-          <div class="rc-meta">
-            <span v-if="r.language" class="lang">
-              <i class="dot" :style="{ background: colorOf(r.language) }" />
-              {{ r.language }}
-            </span>
-            <span class="stat">
-              <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"
-                />
-              </svg>
-              {{ r.stars }}
-            </span>
-            <span class="stat">⑂ {{ r.forks }}</span>
-            <span class="pushed">更新 {{ pushedAgo(r.pushedAt) }}</span>
-          </div>
-        </a>
-      </div>
-
-      <div v-else class="empty">
-        <p>{{ isSearchMode ? '没有搜到相关仓库' : '没有匹配的仓库' }}</p>
-        <p class="empty-sub">{{ isSearchMode ? '换个关键词试试，或点「返回」看当前用户的仓库' : '换个关键词，或点上面的其他用户' }}</p>
-      </div>
-    </section>
-  </div>
+    <div v-else class="empty">
+      <p>{{ isSearchMode ? '没有搜到相关仓库' : '没有匹配的仓库' }}</p>
+      <p class="empty-sub">
+        {{ isSearchMode ? '换个关键词试试，或点「返回」看当前用户的仓库' : '换个关键词，或点上面的其他用户' }}
+      </p>
+    </div>
+  </PageShell>
 </template>
 
 <style scoped>

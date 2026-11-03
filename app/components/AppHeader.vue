@@ -21,16 +21,6 @@ const isActive = (to: string) => {
 <template>
   <header class="site-header">
     <div class="inner">
-      <NuxtLink to="/" class="home-btn" :class="{ on: route.path === '/' }" title="返回首页">
-        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M8 1.5 1.75 6.75V14a.75.75 0 0 0 .75.75h3.5v-3.5h4v3.5h3.5A.75.75 0 0 0 14.25 14V6.75L8 1.5Z"
-          />
-        </svg>
-        <span class="home-label">首页</span>
-      </NuxtLink>
-
       <nav class="tabs">
         <NuxtLink
           v-for="it in items"
@@ -66,33 +56,8 @@ const isActive = (to: string) => {
   gap: 16px;
 }
 
-.home-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  height: 26px;
-  padding: 0 9px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: #56657a;
-  font-size: 12px;
-  font-weight: 550;
-  transition: all 0.15s ease;
-}
 
-.home-btn:hover {
-  border-color: #cfe0fb;
-  color: var(--brand);
-  background: #f7fbff;
-}
 
-.home-btn.on {
-  border-color: transparent;
-  background: #eef4ff;
-  color: var(--brand);
-}
 
 .tabs {
   display: flex;
@@ -141,9 +106,6 @@ const isActive = (to: string) => {
   .inner {
     padding: 8px 14px;
     gap: 10px;
-  }
-  .home-label {
-    display: none;
   }
   .tab {
     padding: 6px 9px;

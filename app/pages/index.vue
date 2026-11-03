@@ -202,99 +202,37 @@ useHead({
 </script>
 
 <template>
-  <div class="page">
-    <!-- ===== 顶部标题 ===== -->
-    <header class="hero">
-      <div class="hero-main">
-        <span class="gh-logo">
-          <svg viewBox="0 0 16 16" width="34" height="34" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-            />
-          </svg>
-        </span>
-        <div class="hero-text">
-          <h1>
-            <span class="date">{{ heroDate || '加载中' }}</span>
-            <span class="title">GitHub 日榜简报</span>
-          </h1>
+  <PageShell
+    icon="📈"
+    :eyebrow="heroDate || undefined"
+    title="GitHub 日榜简报"
+    :subtitle="`GitHub Trending Daily · Top ${data?.topN ?? 10}`"
+  >
+    <!-- 标题右侧：数据源与作者 -->
+    <template #side>
+      <a
+        class="chip"
+        href="https://github.com/ice-a"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="GitHub @ice-a"
+      >
+        <img
+          class="chip-avatar"
+          src="https://github.com/ice-a.png?size=32"
+          alt="ice-a"
+          loading="lazy"
+          referrerpolicy="no-referrer"
+        />
+        @ice-a
+      </a>
+      <a class="chip" href="https://github.com/ice-a/trading" target="_blank" rel="noopener noreferrer">源码</a>
+    </template>
 
-          <div class="meta-row">
-            <p class="subtitle">
-              GitHub Trending Daily · Top {{ data?.topN ?? 10 }}
-              <span v-if="!isToday" class="history-tag">历史数据</span>
-            </p>
-
-            <a
-              class="author-chip"
-              href="https://github.com/ice-a"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="GitHub @ice-a"
-            >
-              <img
-                class="chip-avatar"
-                src="https://github.com/ice-a.png?size=32"
-                alt="ice-a"
-                loading="lazy"
-                referrerpolicy="no-referrer"
-              />
-              @ice-a
-            </a>
-
-            <a
-              class="repo-chip"
-              href="https://github.com/ice-a/trading"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="项目源码 ice-a/trading"
-            >
-              <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-                />
-              </svg>
-              源码
-            </a>
-          </div>
-        </div>
-      </div>
-
-      <div class="hero-side">
-<div class="hero-deco" aria-hidden="true">
-        <svg viewBox="0 0 138 58" width="138" height="58">
-          <rect x="0.5" y="0.5" width="137" height="57" rx="10" fill="#f4f8ff" stroke="#dbe7f8" />
-          <g>
-            <rect x="12" y="30" width="9" height="17" rx="2.5" fill="#bfd9ff" />
-            <rect x="26" y="22" width="9" height="25" rx="2.5" fill="#9ec7fb" />
-            <rect x="40" y="26" width="9" height="21" rx="2.5" fill="#8ab9f7" />
-            <rect x="54" y="15" width="9" height="32" rx="2.5" fill="#6ba4f0" />
-            <rect x="68" y="19" width="9" height="28" rx="2.5" fill="#82b4f5" />
-            <rect x="82" y="10" width="9" height="37" rx="2.5" fill="#4b8df0" />
-          </g>
-          <path
-            d="M6 9.5 7.4 12.4l3.1.45-2.25 2.2.53 3.1L6 16.7l-2.78 1.45.53-3.1L1.5 12.85l3.1-.45L6 9.5Z"
-            fill="#fbbf24"
-          />
-          <circle cx="122" cy="14" r="3" fill="#cfe8ff" />
-          <circle cx="130" cy="24" r="2" fill="#dbe7f8" />
-          <path
-            d="M104 34.5 105.6 38l3.9.35-2.9 2.6.85 3.8L104 42.7l-3.45 2.05.85-3.8-2.9-2.6 3.9-.35L104 34.5Z"
-            fill="#fcd34d"
-          />
-        </svg>
-        </div>
-      </div>
-    </header>
-
-    <!-- ===== 一言（每 60s 自动刷新）===== -->
-    <HitokotoBar :initial="hitokoto" />
-
-    <!-- ===== 工具栏 ===== -->
-    <div class="toolbar">
-      <div class="tb-left">
+    <!-- 工具栏 -->
+    <template #actions>
+      <div class="toolbar">
+        <div class="tb-left">
           <PeriodSwitch v-model="period" @update:model-value="changePeriod" />
         <button v-if="!isToday" class="pill-btn" @click="backToToday">
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -340,6 +278,8 @@ useHead({
       </div>
     </div>
 
+    </template>
+
     <!-- ===== 错误提示 ===== -->
     <div v-if="error" class="alert">
       <b>数据加载失败</b>
@@ -365,16 +305,16 @@ useHead({
       @change="changePage"
     />
 
-    <footer class="foot">
+    <!-- 页脚 -->
+    <template #foot>
       <span>数据每小时写入 SQLite（按日期分区，掉出前 10 的记录只降级、不删除）</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/history">查看历史榜单</NuxtLink>
       <span class="dot-sep">·</span>
       <a href="https://github.com/trending" target="_blank" rel="noopener noreferrer">来源 github.com/trending</a>
-    </footer>
-  </div>
+    </template>
+  </PageShell>
 </template>
-
 <style scoped>
 .page {
   max-width: 1080px;

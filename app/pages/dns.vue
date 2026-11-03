@@ -74,24 +74,12 @@ useHead({ title: 'Cloudflare DNS' })
 </script>
 
 <template>
-  <div class="page">
-    <header class="hero">
-      <div class="hero-left">
-        <h1>Cloudflare DNS</h1>
-        <p>
-          共 <b>{{ data?.total ?? 0 }}</b> 条记录 ·
-          <span class="ok">{{ data?.online ?? 0 }}</span> 在线 ·
-          <span class="bad">{{ data?.offline ?? 0 }}</span> 离线
-          <span class="dot-sep">·</span>
-          最后更新 {{ updatedLabel }}
-          <span class="dot-sep">·</span>
-          <span class="src" :class="data?.source === 'cloudflare' ? 'live' : 'cached'">
-            {{ data?.source === 'cloudflare' ? 'Cloudflare API' : '本地缓存' }}
-          </span>
-        </p>
-      </div>
-
-      <div class="hero-actions">
+  <PageShell
+    icon="🌐"
+    title="Cloudflare DNS"
+    :subtitle="`共 ${data?.total ?? 0} 条记录 · ${data?.online ?? 0} 在线 · ${data?.offline ?? 0} 离线 · 最后更新 ${updatedLabel}`"
+  >
+    <template #side>
         <label class="switch">
           <input v-model="showOffline" type="checkbox" />
           <span class="slider" />
@@ -105,8 +93,7 @@ useHead({ title: 'Cloudflare DNS' })
           </svg>
           {{ probing ? '探活中…' : '手动刷新' }}
         </button>
-      </div>
-    </header>
+    </template>
 
     <div v-if="error" class="alert">加载失败：{{ error.message }}</div>
 
@@ -160,7 +147,7 @@ useHead({ title: 'Cloudflare DNS' })
       <p>没有可显示的记录</p>
       <p class="empty-sub">往 dns_records 表里插入数据即可，或跑 npm run db:seed 生成样例</p>
     </div>
-  </div>
+  </PageShell>
 </template>
 
 <style scoped>

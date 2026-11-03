@@ -104,19 +104,11 @@ useHead({
 </script>
 
 <template>
-  <div class="page">
-    <!-- 顶部 -->
-    <header class="hero">
-      <div class="hero-left">
-<div class="titles">
-          <h1>历史榜单</h1>
-          <p>
-            共 <b>{{ overview?.totalDays ?? 0 }}</b> 天 · <b>{{ overview?.totalRepos ?? 0 }}</b> 条仓库记录
-            <span class="hint">· 掉出前 10 的记录也按日期留在这里</span>
-          </p>
-        </div>
-      </div>
-    </header>
+  <PageShell
+    icon="🗓️"
+    title="历史榜单"
+    :subtitle="`共 ${overview?.totalDays ?? 0} 天 · ${overview?.totalRepos ?? 0} 条仓库记录 · 掉出前 10 的记录也按日期留在这里`"
+  >
 
     <!-- 空态 -->
     <div v-if="!loadingOverview && !days.length" class="empty-card">
@@ -203,12 +195,12 @@ useHead({
       </section>
     </div>
 
-    <footer class="foot">
+    <template #foot>
       <span>历史数据全部来自 SQLite，按日期分区留存</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/">返回今日榜单</NuxtLink>
-    </footer>
-  </div>
+    </template>
+  </PageShell>
 </template>
 
 <style scoped>

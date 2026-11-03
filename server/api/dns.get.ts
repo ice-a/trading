@@ -30,12 +30,20 @@ interface CfResponse {
   result_info?: { total_count?: number }
 }
 
+/**
+ * token 兼容多种命名：Vercel 上常被配成 CLOUDFLARE_API_TOKEN 或 CLOUDFLARE_DNS_TOKEN，
+ * 只认一个名字会出现「明明配了却读不到」。
+ */
 function envToken(): string {
-  return env('CF_API_TOKEN', '')
+  return (
+    env('CF_API_TOKEN', '') ||
+    env('CLOUDFLARE_DNS_TOKEN', '') ||
+    env('CLOUDFLARE_API_TOKEN', '')
+  )
 }
 
 function envZones(): string[] {
-  return env('CF_ZONE_IDS', '')
+  return (env('CF_ZONE_IDS', '') || env('CLOUDFLARE_ZONE_IDS', ''))
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
@@ -68,6 +76,15 @@ async function resolveZoneId(raw: string, token: string): Promise<{ id: string; 
 
     if (!res.ok || !body?.success) {
       const msg = body?.errors?.[0]?.message || `HTTP ${res.status}`
+      // CF 对无效 token 统一回 "Invalid request headers"，信息量为零，补上可诊断细节
+      if (/authentication|invalid request headers|10000/i.test(msg)) {
+        return {
+          id: '',
+          error:
+            `token 被 Cloudflare 拒绝（长度 ${token.length}，前缀 ${token.slice(0, 4) || '空'}…）。` +
+            '检查：① token 是否有效 ② 要有 Zone.DNS:Read 权限 ③ token 里不能带空格或引号'
+        }
+      }
       return { id: '', error: `解析 zone "${raw}" 失败：${msg}` }
     }
     const hit = body.result?.[0]
@@ -96,6 +113,13 @@ async function fetchZoneRecords(zoneId: string, token: string): Promise<{ record
 
     if (!res.ok || !body?.success) {
       const msg = body?.errors?.[0]?.message || `Cloudflare API ${res.status}`
+      // CF 的 "Authentication error" 信息量为零，这里补上可诊断的细节
+      if (/authentication/i.test(msg)) {
+        const hint =
+          `token 被 Cloudflare 拒绝（长度 ${token.length}，前缀 ${token.slice(0, 4) || '空'}…）` +
+          '。检查：① token 是否有效未过期 ② 权限要有 Zone.DNS:Read ③ 该 token 所属账号能访问这个 zone'
+        return { records: [], error: hint }
+      }
       return { records: [], error: msg }
     }
 
