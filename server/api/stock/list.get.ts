@@ -13,6 +13,7 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
 
+  // 3 分钟：报价变化快，但热门榜不需要秒级；与 K 线里的报价缓存分开（后者 30 秒）
   return withDbCache(`stock:list:${market}`, 3 * 60_000, async () => {
     const pool = market === 'HK' ? HK_HOT : US_HOT
     const items = await fetchQuotes(pool.map((secid) => ({ secid, market })))

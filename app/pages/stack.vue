@@ -148,33 +148,109 @@ const LS_KEY = 'stock:key'
 onMounted(() => {
   userName.value = localStorage.getItem(LS_USER) || ''
   userKey.value = localStorage.getItem(LS_KEY) || ''
+  void loadForTab(tab.value)
 })
 
 /* ---------- 拉取首页数据 ---------- */
-async function loadHot() {
-  loading.value = true
+/** 浏览器侧缓存：切 Tab / 刷新页面前不会重复打接口 */
+const HOT_TTL = 3 * 60_000 // 3 分钟
+const hotCache = {
+  at: 0,
+  data: null as null | { gainers: Quote[]; sectors: Sector[]; err: string }
+}
+const listCache = {
+  hk: { at: 0, items: [] as Quote[] },
+  us: { at: 0, items: [] as Quote[] }
+}
+
+/**
+ * 只拉当前 Tab 需要的那一块。
+ *   A 股  → hot（涨幅榜 + 板块）
+ *   港股  → list?market=hk
+ *   美股  → list?market=us
+ *   我的持仓 → 什么都不拉
+ * 切 Tab 时若本地缓存还有效就直接用，不再请求。
+ */
+async function loadForTab(t: Tab, force = false) {
+  if (t === 'MINE') return
+
+  const now = Date.now()
+
+  // A 股：一个接口拿两块
+  if (t === 'A') {
+    if (!force && hotCache.data && now - hotCache.at < HOT_TTL) {
+      gainers.value = hotCache.data.gainers
+      sectors.value = hotCache.data.sectors
+      errMsg.value = hotCache.data.err
+      loading.value = false
+      return
+    }
+    loading.value = !hotCache.data
+    errMsg.value = ''
+    try {
+      const res = await $fetch<{
+        gainers: Quote[]
+        sectors: Sector[]
+        gainersError: string | null
+        sectorsError: string | null
+      }>('/api/stock/hot', { query: { limit: 12 } })
+      hotCache.at = Date.now()
+      hotCache.data = {
+        gainers: res.gainers ?? [],
+        sectors: res.sectors ?? [],
+        err: res.gainersError || res.sectorsError || ''
+      }
+      gainers.value = hotCache.data.gainers
+      sectors.value = hotCache.data.sectors
+      errMsg.value = hotCache.data.err
+    } catch (e) {
+      errMsg.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      loading.value = false
+    }
+    return
+  }
+
+  // 港 / 美股
+  const side = t === 'HK' ? 'hk' : 'us'
+  const slot = listCache[side]
+  if (!force && slot.items.length && now - slot.at < HOT_TTL) {
+    if (t === 'HK') hkList.value = slot.items
+    else usList.value = slot.items
+    loading.value = false
+    return
+  }
+
+  loading.value = !slot.items.length
   errMsg.value = ''
   try {
-    const [hotRes, hkRes, usRes] = await Promise.allSettled([
-      $fetch<{ gainers: Quote[]; sectors: Sector[]; gainersError: string | null; sectorsError: string | null }>(
-        '/api/stock/hot',
-        { query: { limit: 12 } }
-      ),
-      $fetch<{ items: Quote[] }>('/api/stock/list', { query: { market: 'hk' } }),
-      $fetch<{ items: Quote[] }>('/api/stock/list', { query: { market: 'us' } })
-    ])
-
-    if (hotRes.status === 'fulfilled') {
-      gainers.value = hotRes.value.gainers ?? []
-      sectors.value = hotRes.value.sectors ?? []
-      errMsg.value = hotRes.value.gainersError || hotRes.value.sectorsError || ''
-    }
-    if (hkRes.status === 'fulfilled') hkList.value = hkRes.value.items ?? []
-    if (usRes.status === 'fulfilled') usList.value = usRes.value.items ?? []
+    const res = await $fetch<{ items: Quote[] }>('/api/stock/list', { query: { market: side } })
+    slot.at = Date.now()
+    slot.items = res.items ?? []
+    if (t === 'HK') hkList.value = slot.items
+    else usList.value = slot.items
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
+  }
+}
+
+/** 切 Tab（缓存命中则零请求） */
+function switchTab(t: Tab) {
+  if (tab.value === t) return
+  tab.value = t
+  void loadForTab(t)
+}
+
+/** 手动刷新当前 Tab（强制绕过缓存） */
+const refreshing = ref(false)
+async function refreshCurrent() {
+  refreshing.value = true
+  try {
+    await loadForTab(tab.value, true)
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -482,10 +558,20 @@ const cls = (n: number) => (n > 0 ? 'up' : n < 0 ? 'down' : 'flat')
     <template v-else>
       <!-- Tab -->
       <div class="tabs">
-        <button :class="{ on: tab === 'A' }" @click="tab = 'A'">A 股</button>
-        <button :class="{ on: tab === 'HK' }" @click="tab = 'HK'">港股</button>
-        <button :class="{ on: tab === 'US' }" @click="tab = 'US'">美股</button>
-        <button :class="{ on: tab === 'MINE' }" @click="tab = 'MINE'">我的持仓</button>
+        <button :class="{ on: tab === 'A' }" @click="switchTab('A')">A 股</button>
+        <button :class="{ on: tab === 'HK' }" @click="switchTab('HK')">港股</button>
+        <button :class="{ on: tab === 'US' }" @click="switchTab('US')">美股</button>
+        <button :class="{ on: tab === 'MINE' }" @click="switchTab('MINE')">我的持仓</button>
+        <span class="tab-spacer" />
+        <button
+          v-if="tab !== 'MINE'"
+          class="refresh-btn"
+          :disabled="refreshing"
+          title="绕过缓存重新拉取"
+          @click="refreshCurrent"
+        >
+          {{ refreshing ? '刷新中…' : '↻ 刷新' }}
+        </button>
       </div>
 
       <!-- ========== A股 ========== -->
