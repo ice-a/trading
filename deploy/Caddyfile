@@ -1,4 +1,4 @@
-# 瞭望台 · Caddy 反代示例
+# 观澜志 · Caddy 反代示例
 #
 # 放到 /etc/caddy/Caddyfile（或 sites-enabled/），改掉域名后：
 #   sudo caddy validate --config /etc/caddy/Caddyfile

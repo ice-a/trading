@@ -8,7 +8,7 @@
  *
  * 与 db/schema.sql 保持同步：改表结构时两处都要改（scripts/verify-sql.mjs 会校验）。
  */
-export const SCHEMA_VERSION = '4.0.0'
+export const SCHEMA_VERSION = '5.0.0'
 
 export const SCHEMA_DDL = [
   `CREATE TABLE IF NOT EXISTS trending_repos (
@@ -72,47 +72,6 @@ export const SCHEMA_DDL = [
     created_at TEXT NOT NULL
   )`,
 
-  /* ---------- 股票 / 持仓 ---------- */
-
-  `CREATE TABLE IF NOT EXISTS portfolios (
-    user       TEXT PRIMARY KEY,
-    key_hash   TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS portfolio_trades (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_name  TEXT NOT NULL,
-    code       TEXT NOT NULL,
-    name       TEXT NOT NULL DEFAULT '',
-    market     TEXT NOT NULL DEFAULT 'A',
-    side       TEXT NOT NULL DEFAULT 'buy',
-    venue      TEXT NOT NULL DEFAULT '',
-    trade_date TEXT NOT NULL,
-    quantity   REAL NOT NULL DEFAULT 0,
-    price      REAL NOT NULL DEFAULT 0,
-    fee        REAL NOT NULL DEFAULT 0,
-    currency   TEXT NOT NULL DEFAULT 'CNY',
-    note       TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_trade_user ON portfolio_trades (user_name, trade_date DESC)`,
-
-  `CREATE TABLE IF NOT EXISTS fx_rates (
-    currency   TEXT PRIMARY KEY,
-    cny_rate   REAL NOT NULL DEFAULT 1,
-    updated_at TEXT NOT NULL
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS stock_search_history (
-    user_name  TEXT NOT NULL,
-    keyword    TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (user_name, keyword)
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_search_time ON stock_search_history (user_name, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS response_cache (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

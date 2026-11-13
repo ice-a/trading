@@ -1,5 +1,5 @@
 -- ============================================================
--- 瞭望台 · SQLite schema（功能裁剪版：只保留榜单 / 抓取 / DNS）
+-- 观澜志 · SQLite schema（功能裁剪版：只保留榜单 / 抓取 / 缓存）
 -- 应用方式：npm run db:init（幂等）
 -- 远程 libSQL（Turso）：REMOTE=1 npm run db:init
 -- ============================================================
@@ -77,49 +77,3 @@ CREATE TABLE IF NOT EXISTS response_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_cache_exp ON response_cache (expires_at);
 
-
--- ============ 股票 / 持仓 ============
-
--- 账本凭据：user → key 的哈希（不存明文）
-CREATE TABLE IF NOT EXISTS portfolios (
-  user       TEXT PRIMARY KEY,
-  key_hash   TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
--- 一条记录 = 一次买入/卖出；持仓由记录实时推导
-CREATE TABLE IF NOT EXISTS portfolio_trades (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_name  TEXT NOT NULL,
-  code       TEXT NOT NULL,
-  name       TEXT NOT NULL DEFAULT '',
-  market     TEXT NOT NULL DEFAULT 'A',   -- A | HK | US | FUND
-  side       TEXT NOT NULL DEFAULT 'buy', -- buy | sell
-  venue      TEXT NOT NULL DEFAULT '',    -- 交易所/券商
-  trade_date TEXT NOT NULL,
-  quantity   REAL NOT NULL DEFAULT 0,
-  price      REAL NOT NULL DEFAULT 0,
-  fee        REAL NOT NULL DEFAULT 0,
-  currency   TEXT NOT NULL DEFAULT 'CNY',
-  note       TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_trade_user ON portfolio_trades (user_name, trade_date DESC);
-
--- 汇率：1 单位外币 = cny_rate 人民币（手工维护，不依赖外部 fx 接口）
-CREATE TABLE IF NOT EXISTS fx_rates (
-  currency   TEXT PRIMARY KEY,
-  cny_rate   REAL NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL
-);
-
--- 搜索历史（去重）
-CREATE TABLE IF NOT EXISTS stock_search_history (
-  user_name  TEXT NOT NULL,
-  keyword    TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (user_name, keyword)
-);
-CREATE INDEX IF NOT EXISTS idx_search_time ON stock_search_history (user_name, created_at DESC);

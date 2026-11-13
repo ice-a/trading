@@ -1,7 +1,7 @@
 import { defineNuxtConfig } from 'nuxt/config'
 
 /**
- * 瞭望台 · 单机全栈配置
+ * 观澜志 · 单机全栈配置
  *
  * 形态：一个 Nuxt 应用（Vue 页面 + Nitro API）编译成一个 Node 进程，
  *       数据落本地 SQLite 单文件，Caddy 反代 127.0.0.1:3000。

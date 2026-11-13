@@ -316,112 +316,25 @@ useHead({
   </PageShell>
 </template>
 <style scoped>
-.page {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 28px 20px 48px;
-}
-
-/* ===== Hero ===== */
-.hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 18px;
-}
-
-.hero-main {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.gh-logo {
-  flex: none;
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
+/* ===== 标题右侧信息片 ===== */
+.chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  background: #fff;
-  color: #10161f;
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-md);
-}
-
-.hero-text {
-  min-width: 0;
-}
-
-h1 {
-  margin: 0;
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 10px;
-  line-height: 1.2;
-}
-
-.date {
-  font-size: 27px;
-  font-weight: 800;
-  letter-spacing: -0.6px;
-  background: linear-gradient(120deg, #1f6feb 0%, #4f46e5 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  font-variant-numeric: tabular-nums;
-}
-
-.title {
-  font-size: 22px;
-  font-weight: 750;
-  color: #101828;
-  letter-spacing: -0.3px;
-}
-
-.meta-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-.meta-row .subtitle {
-  margin: 0;
-}
-
-.author-chip,
-.repo-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 8px 0 3px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: #fff;
   color: #6b7a90;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   line-height: 1;
-  transition: all 0.15s ease;
   white-space: nowrap;
+  transition: all 0.15s ease;
 }
 
-.repo-chip {
-  padding: 0 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: 500;
-  font-size: 10.5px;
-}
-
-.author-chip:hover,
-.repo-chip:hover {
+.chip:hover {
   border-color: #cfe0fb;
   background: #f7fbff;
   color: var(--brand);
@@ -433,30 +346,6 @@ h1 {
   border-radius: 50%;
   object-fit: cover;
   background: #f1f5fa;
-}
-
-.subtitle {
-  margin: 4px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--muted);
-  letter-spacing: 0.2px;
-}
-
-.history-tag {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: #fff3e0;
-  color: #b45309;
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.hero-deco {
-  flex: none;
-  filter: drop-shadow(0 6px 14px rgba(31, 111, 235, 0.09));
 }
 
 /* ===== 工具栏 ===== */
@@ -473,40 +362,6 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/* 页面级导航（右上角），和工具栏操作区分开 */
-.hero-side {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex: none;
-}
-
-.nav-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 13px;
-  border-radius: 10px;
-  border: 1px solid #cfe0fb;
-  background: linear-gradient(180deg, #ffffff 0%, #f2f8ff 100%);
-  color: var(--brand);
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.2px;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.16s ease;
-  white-space: nowrap;
-}
-
-.nav-btn:hover {
-  border-color: #a9c9f5;
-  background: #e9f2ff;
-  color: #1558c0;
-  box-shadow: 0 4px 14px rgba(31, 111, 235, 0.16);
-  transform: translateY(-1px);
 }
 
 .pill-btn {
@@ -612,58 +467,11 @@ h1 {
   white-space: nowrap;
 }
 
-/* ===== 页脚 ===== */
-.foot {
-  margin-top: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 11.5px;
-  color: #9aa7b7;
-}
-
-.foot a {
-  color: #7b93b5;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
 .dot-sep {
   color: #cbd5e1;
 }
 
 @media (max-width: 860px) {
-  .hero {
-    flex-wrap: wrap;
-  }
-  .hero-deco {
-    display: none;
-  }
-  .nav-btn {
-    height: 32px;
-    padding: 0 10px;
-    font-size: 12px;
-  }
-  .page {
-    padding: 20px 14px 36px;
-  }
-  .date {
-    font-size: 22px;
-  }
-  .title {
-    font-size: 18px;
-  }
-  .gh-logo {
-    width: 46px;
-    height: 46px;
-    border-radius: 13px;
-  }
-  .gh-logo svg {
-    width: 27px;
-    height: 27px;
-  }
   .tb-right {
     display: none;
   }

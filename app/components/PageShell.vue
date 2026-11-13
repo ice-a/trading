@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 页面外壳：五个页面共用同一套骨架，保证切页时各区块位置完全不动。
+ * 页面外壳：四个页面共用同一套骨架，保证切页时各区块位置完全不动。
  *
  * 固定三段（自上而下）：
  *   ┌ 标题区（hero）—— 图标 + 标题 + 副标题 + 右侧插槽
@@ -59,7 +59,7 @@ const props = defineProps<Props>()
 </template>
 
 <style scoped>
-/* 全站统一宽度：五个页面用同一个 max-width，切页时左右边界不跳动 */
+/* 全站统一宽度：四个页面用同一个 max-width，切页时左右边界不跳动 */
 .shell {
   max-width: 1240px;
   margin: 0 auto;

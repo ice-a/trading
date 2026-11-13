@@ -2,6 +2,9 @@
 /**
  * 一言卡片：每 60 秒自动换一句，底部细进度条走完即刷新。
  * 刷新间隔固定 60 秒（组件的 setInterval）。
+ *
+ * compact 模式：嵌入顶栏品牌区与页签之间 —— 透明底、单行截断、高度贴合栏高；
+ * 仍挂在 AppHeader（全局常驻），切页时组件不重建、计时器不重置。
  */
 interface Quote {
   text: string
@@ -9,7 +12,14 @@ interface Quote {
   source: 'remote' | 'local'
 }
 
-// 常驻在 app.vue 里，不再由页面传入 initial：切页时组件不重建，计时器也不重置
+interface Props {
+  /** 紧凑模式：嵌在顶栏里 */
+  compact?: boolean
+}
+
+const props = defineProps<Props>()
+
+// 常驻在顶栏里，不再由页面传入 initial：切页时组件不重建，计时器也不重置
 const quote = ref<Quote | null>(null)
 const fading = ref(false)
 const ticker = ref(0)
@@ -48,7 +58,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="hitokoto" :class="{ fading }">
+  <div class="hitokoto" :class="{ fading, compact: props.compact }">
     <div class="left">
       <span class="quote-mark">“</span>
       <div class="body">
@@ -189,6 +199,81 @@ onBeforeUnmount(() => {
   }
   to {
     transform: scaleX(1);
+  }
+}
+
+/* ===== 紧凑模式：嵌在顶栏内 ===== */
+.hitokoto.compact {
+  align-self: stretch;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.hitokoto.compact .left {
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.hitokoto.compact .quote-mark {
+  font-size: 26px;
+  margin-top: 0;
+  color: #c7d7f2;
+}
+
+.hitokoto.compact .body {
+  flex: 1;
+  min-width: 0;
+}
+
+.hitokoto.compact .text {
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.hitokoto.compact .from {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.hitokoto.compact .right {
+  flex: none;
+}
+
+.hitokoto.compact .bar {
+  bottom: 6px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 999px;
+}
+
+@media (max-width: 720px) {
+  .hitokoto.compact {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hitokoto.compact .bar-fill {
+    animation: none;
   }
 }
 

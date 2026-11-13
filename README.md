@@ -1,6 +1,6 @@
-# 瞭望台 · GitHub 日榜简报
+# 观澜志 · GitHub 日榜简报
 
-> GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + 行情台（A股/港股/美股/基金 + 持仓账本）+ 历史榜单。
+> GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + 历史榜单。
 
 **一个 Nuxt 全栈应用，两种部署形态共用同一份代码：**
 
@@ -21,10 +21,9 @@
 | `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `trending_repos` |
 | `/github` | 查任意 GitHub 用户的公开仓库 | GitHub 公开 API |
 | `/avatar` | 个性头像生成器（seed 可复现、4 种风格、导出 PNG） | 纯前端 SVG |
-| `/stack` | 行情台：热门板块 / 热门股票 / K线 / 基金持仓 / 我的持仓 | 腾讯财经 + 新浪财经 + `portfolio_trades` |
 | `/history` | 历史榜单时间线 + 当日完整榜单 | `trending_repos` |
 
-> 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）。
+> 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）、行情台（/stack）。
 
 ---
 
@@ -213,11 +212,8 @@ pm2 save && pm2 startup
 | `trending_repos` | 榜单仓库（日/周/月 × 日期） | `(date, period, repo_key)` |
 | `crawl_runs` | 抓取日志 | `id` |
 | `app_meta` | 运行元信息（上次抓取时间等） | `key` |
-| `portfolios` | 持仓账本凭据（user → key 哈希） | `user` |
-| `portfolio_trades` | 买卖流水（持仓由流水实时推导） | `id` |
-| `fx_rates` | 汇率（1 外币 = ? 人民币） | `currency` |
-| `stock_search_history` | 搜索历史（去重） | `(user_name, keyword)` |
 | `crawl_locks` | 抓取锁（防并发） | `name` |
+| `response_cache` | 跨实例响应缓存 | `key` |
 
 榜单行语义：`bucket` = `0` 前 N 名 / `1` 榜内其他 / `2` 已掉榜；`dropped` 掉榜标记；`snapshots` 最近 48 个采样点。
 
@@ -230,13 +226,6 @@ pm2 save && pm2 startup
 | GET | `/api/trending` | 单周期榜单（`date`/`period`/`page`） |
 | GET | `/api/trending-bundle` | 日/周/月三份一次取回 |
 | GET | `/api/history` | 历史总览 |
-| GET | `/api/stock/hot` | A股涨幅榜 + 行业板块 |
-| GET | `/api/stock/list?market=hk\|us` | 港股 / 美股热门 |
-| GET | `/api/stock/search?q=` | 搜股票 / 港股 / 美股 / 基金 |
-| GET | `/api/stock/kline?symbol=` | K 线（日/周/月），symbol 形如 sh600519 / hk00700 / usAAPL |
-| GET | `/api/stock/fund?code=` | 基金前十重仓 |
-| GET | `/api/stock/quotes?symbols=` | 批量报价（持仓浮盈等场景） |
-| GET/POST | `/api/stock/portfolio` | 持仓账本（user + key），含实时浮动盈亏 |
 | GET | `/api/hitokoto` | 一言 |
 | GET | `/api/github-search` · `/api/repos` | GitHub 查询 |
 | POST | `/api/refresh` | 页面按需刷新（1 小时节流，`?force=1`） |
@@ -249,7 +238,7 @@ pm2 save && pm2 startup
 ## 目录结构
 
 ```
-├─ app/                 # 前端：5 个页面 + 组件
+├─ app/                 # 前端：4 个页面 + 组件
 ├─ server/
 │  ├─ api/              # 同源 Nitro 路由
 │  ├─ utils/

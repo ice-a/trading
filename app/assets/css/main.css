@@ -119,3 +119,12 @@ button {
   animation: shimmer 1.4s ease-in-out infinite;
   border-radius: 6px;
 }
+
+/* ===== 站点艺术字：观澜志（毛笔楷书子集，仅含 3 个字形） ===== */
+@font-face {
+  font-family: 'GuanlanBrush';
+  src: url('/fonts/guanlanzhi-brush.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

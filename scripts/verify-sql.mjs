@@ -19,11 +19,7 @@ const EXPECT_TABLES = [
   'app_meta',
   'crawl_locks',
   'crawl_runs',
-  'fx_rates',
-  'portfolio_trades',
-  'portfolios',
   'response_cache',
-  'stock_search_history',
   'trending_repos'
 ]
 
@@ -49,7 +45,7 @@ const indexes = db
   .prepare("select name from sqlite_master where type='index' and name like 'idx_%'")
   .all()
   .map((r) => r.name)
-check('索引', indexes.length >= 6, `${indexes.length} 个：${indexes.join(', ')}`)
+check('索引', indexes.length >= 4, `${indexes.length} 个：${indexes.join(', ')}`)
 
 /* ---------- 1.5 内联 DDL 与 schema.sql 一致性 ----------
  * server/utils/schema.ts 里的 SCHEMA_DDL 是构建进产物的一份副本，
@@ -75,12 +71,16 @@ console.log('\n①.5 内联 DDL 一致性 …')
 
 /* ---------- 2. seed ---------- */
 console.log('\n② 执行 db/seed.sql …')
-db.exec(readFileSync('db/seed.sql', 'utf8'))
-check('seed fx_rates', db.prepare('select count(*) as n from fx_rates').get().n === 3)
+const seedSql = readFileSync('db/seed.sql', 'utf8')
+const rowCounts = () =>
+  EXPECT_TABLES.map((t) => db.prepare(`select count(*) as n from ${t}`).get().n).join(',')
+const beforeSeed = rowCounts()
+db.exec(seedSql)
+check('seed 不改任何表行数', rowCounts() === beforeSeed)
 
 console.log('\n③ 幂等性（seed 再跑一次）…')
-db.exec(readFileSync('db/seed.sql', 'utf8'))
-check('重复执行不增行', db.prepare('select count(*) as n from fx_rates').get().n === 3)
+db.exec(seedSql)
+check('重复执行不改行数', rowCounts() === beforeSeed)
 
 /* ---------- 3. 源码 insert 列数校验 ---------- */
 console.log('\n④ 源码 insert 语句列数校验 …')
