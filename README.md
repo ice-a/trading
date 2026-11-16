@@ -2,15 +2,8 @@
 
 > GitHub Trending 日/周/月榜 + GitHub 用户查询 + 个性头像 + 历史榜单。
 
-**一个 Nuxt 全栈应用，两种部署形态共用同一份代码：**
-
-| 形态 | 运行时 | 数据库 | 定时抓取 |
-| --- | --- | --- | --- |
-| **Vercel（免费 Hobby）** | Serverless Functions | 远程 libSQL（Turso） | Vercel Cron 每天 1 次，或外部 cron 打 `/api/crawl` |
-| **自建 1C1G** | Node 常驻进程（pm2） | 本地 SQLite 单文件 | 进程内定时器，启动抓一轮 + 每小时 |
-
-数据层是同一套接口（`sqlAll` / `sqlFirst` / `sqlRun` / `sqlBatch`），
-**配了 `TURSO_DATABASE_URL` 就走远程，否则走本地文件** —— 业务代码一行都不用改。
+**纯静态站点**：Nuxt 4 构建成 SPA，托管在 **GitHub Pages** —— 没有服务器、没有数据库。
+数据由 GitHub Actions 每小时抓取并写成静态 JSON，随站点一起发布。
 
 ---
 
@@ -18,12 +11,11 @@
 
 | 路由 | 说明 | 数据来源 |
 | --- | --- | --- |
-| `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `trending_repos` |
-| `/github` | 查任意 GitHub 用户的公开仓库 | GitHub 公开 API |
+| `/` | GitHub 日/周/月榜，按日期留存，掉榜不删 | `public/data/bundle.json` |
+| `/github` | 查任意 GitHub 用户的公开仓库 / 全站搜索 | 浏览器直连 GitHub API |
 | `/avatar` | 个性头像生成器（seed 可复现、4 种风格、导出 PNG） | 纯前端 SVG |
-| `/history` | 历史榜单时间线 + 当日完整榜单 | `trending_repos` |
-
-> 已移除：热门榜单（/v2）、网站导航（/nav）、AI 资源台（/ai）、分享（/share）、后台（/admin）、行情台（/stack）。
+| `/history` | 历史榜单时间线 + 当日完整榜单 | `public/data/bundle.json` |
+| 顶栏一言 | 自动轮换短句 | v1.hitokoto.cn（失败本地兜底） |
 
 ---
 
@@ -31,11 +23,62 @@
 
 | 层 | 选型 |
 | --- | --- |
-| 框架 | Nuxt 4（Vue 3 SSR + Nitro server API） |
-| 数据库 | SQLite 语法：本地用 `node:sqlite`，远程用 `@libsql/client`（Turso） |
-| 缓存 | 进程内 Map + TTL |
-| 抓取 | `cheerio` 解析 GitHub Trending HTML |
-| 部署 | Vercel（`vercel` preset）或 Node（`node-server` preset） |
+| 框架 | Nuxt 4（Vue 3 SPA，`ssr:false`，Nitro `static` preset） |
+| 数据 | 构建期生成的 `public/data/bundle.json`（历史 + 掉榜语义都在里面） |
+| 抓取 | GitHub Actions 定时跑 `cheerio/slim` 解析 GitHub Trending |
+| 托管 | GitHub Pages（免费、无运维、自带 HTTPS + CDN） |
+
+---
+
+## 工作原理
+
+```
+GitHub Actions  pages.yml（每小时 + push + 手动触发，一条龙）：
+  抓 GitHub Trending 三榜 → 合并历史/掉榜 → 写 public/data/bundle.json
+  → commit 回 master → npm ci + build → 部署到 GitHub Pages
+```
+
+抓取和部署放在同一 workflow 里：GITHUB_TOKEN 的 push 不会触发别的 workflow，
+拆成两个的话新数据不会重新部署，所以合并。
+
+`server/` 目录保留作历史参考，**静态站不依赖它**；前端已全部改为直读 JSON / 直连外部 API。
+
+---
+
+## 部署到 GitHub Pages（一次配置）
+
+### 1. 开启 Pages
+仓库 **Settings → Pages → Build and deployment**：
+- Source 选 **GitHub Actions**。
+
+### 2. 配 baseURL（二选一）
+
+**A. 项目站**（`https://<user>.github.io/trading/`）：不用配，workflow 自动用 `/trading/`。
+
+**B. 自定义域名**（推荐，走根路径 `/`）：
+在 **Settings → Secrets and variables → Actions → Variables** 新增：
+- `CNAME` = 你的域名（如 `guanlan.example.com`）
+
+workflow 会自动把 baseURL 设为 `/` 并把域名写进产物。
+
+### 3. 可选变量
+同在 Variables 里可按需要覆盖：
+`APP_TIMEZONE`(默认 `Asia/Shanghai`)、`TOP_N`(10)、`PAGE_SIZE`(10)、`TRENDING_LANGUAGE`(空=全部)、`UPDATE_INTERVAL_MINUTES`(60)。
+
+### 4. 首次触发
+把代码 push 到 `master`，或手动跑一次 **Actions → pages → Run workflow**。
+之后 `pages.yml` 每小时自动抓数据并重新部署。
+
+### 5. 自定义域名 DNS（如果用了 B）
+在域名服务商处，二选一：
+
+| 域名类型 | 记录 | 值 |
+| --- | --- | --- |
+| 子域名 `abc.example.com` | CNAME → | `<user>.github.io` |
+| 根域名 `example.com` | A（4 条）→ | `185.199.108.153` / `.109` / `.110` / `.111` |
+
+再回到 **Settings → Pages → Custom domain** 填域名 → Save → 勾选 **Enforce HTTPS**。
+> 注意：即使 workflow 写了 CNAME 文件，也仍需在 Pages 设置里填一次域名，HTTPS 才会生效。
 
 ---
 
@@ -43,232 +86,59 @@
 
 ```bash
 npm install
-npm run db:init        # 建表（默认写 data/app.db）
-npm run dev            # http://localhost:3000
+npm run gen:data     # 抓一次数据，写 public/data/bundle.json（首次已有示例数据）
+npm run dev          # http://localhost:3000
 ```
 
-首次启动会自检数据库并抓一轮榜单（`CRAWL_ON_BOOT=false` 可关）。
-
-### 常用命令
+`bundle.json` 已随仓库提交了一份初始数据，直接 `npm run dev` 也能看。
 
 | 命令 | 说明 |
 | --- | --- |
 | `npm run dev` | 开发（热更新） |
-| `npm run build` | 构建（Vercel 上设 `VERCEL=1` 切 preset） |
-| `npm run start` | 本地跑生产产物 |
-| `npm run db:init` | 建表（幂等；远程库同样适用） |
-| `npm run db:seed` | 灌示例数据（幂等） |
-| `npm run db:info` | 表行数 / 文件大小 / 连接模式 |
-| `npm run db:reset` | 删库重建（`FORCE=1` 确认，仅本地） |
-| `npm run turso:init` | 建 Turso 库 + 建表 + 打印 Vercel 环境变量 |
-| `npm run crawl` | 手动抓一次（服务需在运行） |
-| `npm run verify:sql` | 校验 schema / seed / 关键 SQL |
-| `npm run typecheck` | server(tsc) + app(vue-tsc) |
+| `npm run build` | 构建静态产物到 `.output/public`（`BASE_PATH` 可设子路径） |
+| `npm run gen:data` | 抓 GitHub Trending 并更新 `bundle.json` |
+| `npm run typecheck` | server + app 类型检查 |
 
 ---
 
-## 部署到 Vercel（免费）
+## 数据文件结构
 
-### 1. 建远程库（Turso，免费 500MB）
-
-Vercel 的函数**没有持久磁盘**，`/tmp` 不跨实例，SQLite 文件写不了 —— 所以必须用远程库。
-Turso 是 libSQL（SQLite 分支），schema 完全不用改。
-
-一条命令搞定建库 + 建表 + 生成 token + 打印环境变量：
-
-```bash
-curl -sSfL https://get.tur.so/install.sh | bash   # 装 CLI
-turso auth signup                                  # 登录
-
-npm run turso:init        # = bash scripts/init-turso.sh
+`public/data/bundle.json`：
+```jsonc
+{
+  "generatedAt": "ISO 时间",
+  "meta": { "topN": 10, "pageSize": 10, "intervalMinutes": 60, "today": "YYYY-MM-DD", ... },
+  "days": [
+    {
+      "date": "YYYY-MM-DD",
+      "humanDate": "2026年11月16日 周一",
+      "periods": {
+        "daily":   { /* TrendingResponse: items / stats / days / updatedAt ... */ },
+        "weekly":  { ... },
+        "monthly": { ... }
+      }
+    }
+  ]
+}
 ```
 
-它会：检查 CLI 与登录 → 建库（已存在则复用）→ 取 URL / 生成 token →
-就地执行 `db/schema.sql` + `db/seed.sql` → 写回 `.env` → 打印要填到 Vercel 的三条变量。
-
-想手动来也行：
-
-```bash
-turso db create liaowangtai
-turso db show liaowangtai --url      # libsql://...
-turso db tokens create liaowangtai   # ey...
-
-export TURSO_DATABASE_URL="libsql://xxxx.turso.io"
-export TURSO_AUTH_TOKEN="ey..."
-npm run db:init && npm run db:seed
-```
-
-### 2. 导入仓库
-
-Vercel Dashboard → Add New Project → 选 `ice-a/trading` → Framework 自动识别 Nuxt。
-
-### 3. 配环境变量
-
-Project Settings → Environment Variables：
-
-| 变量 | 值 | 必需 |
-| --- | --- | --- |
-| `TURSO_DATABASE_URL` | `libsql://xxxx.turso.io` | ✅ |
-| `TURSO_AUTH_TOKEN` | `ey...` | ✅ |
-| `CRON_SECRET` | 随机串 | ✅（cron 鉴权；`/api/crawl` 也认 `CRON_TOKEN`，两者同名即可） |
-| `GITHUB_TOKEN` | GitHub PAT | 可选（提高配额） |
-
-### 4. 部署
-
-push 到 master 即自动部署。部署完访问 `/api/health`：
-
-```json
-{"ok":true,"runtime":"vercel","storage":"libsql","db":{"mode":"remote","url":"libsql://..."}}
-```
-
-### 5. 灌第一批数据
-
-```bash
-curl "https://<your-app>.vercel.app/api/cron" -H "Authorization: Bearer $CRON_SECRET"
-```
-
-### 6. 定时抓取的真相（Hobby 限制）
-
-**Vercel Hobby 的 cron 每天只能跑一次**，`vercel.json` 里配的是：
-
-```json
-"crons": [{ "path": "/api/cron", "schedule": "0 3 * * *" }]
-```
-
-想要**每小时**更新，两种做法。
-
-**A. GitHub Actions（推荐）**
-
-在仓库里新建 `.github/workflows/crawl.yml`，内容：
-
-```yaml
-name: crawl
-on:
-  schedule: [{ cron: '5 * * * *' }]   # 每小时第 5 分钟（UTC）
-  workflow_dispatch:
-concurrency:
-  group: crawl
-  cancel-in-progress: false
-permissions:
-  contents: read
-jobs:
-  trigger:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 触发抓取
-        env:
-          APP_URL: ${{ vars.APP_URL }}
-          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
-        run: |
-          test -n "$APP_URL" && test -n "$CRON_TOKEN" || { echo "缺少 APP_URL / CRON_TOKEN"; exit 1; }
-          curl -fsS --max-time 120 -X POST             "$APP_URL/api/crawl?token=$CRON_TOKEN"             -H "Authorization: Bearer $CRON_TOKEN"
-```
-
-仓库配置（Settings → Secrets and variables → Actions）：
-
-| 类型 | 名称 | 值 |
-| --- | --- | --- |
-| Variables | `APP_URL` | `https://<你的 vercel 域名>` |
-| Secrets | `CRON_TOKEN` | 与 Vercel 的 `CRON_SECRET` 相同 |
-
-> 用命令行 push 这个文件需要 PAT 带 `workflow` scope；**直接在 GitHub 网页 New file 粘贴内容不需要任何 scope**。
-
-**B. 外部 cron（最省事，不碰 GitHub 权限）**
-
-cron-job.org / UptimeRobot 之类，每小时发一次：
-
-```bash
-curl -fsS -X POST "https://<your-app>.vercel.app/api/crawl?token=$CRON_TOKEN"
-```
+前端 `app/utils/staticData.ts` 把它转成页面需要的结构，渲染逻辑基本不变。
 
 ---
 
-## 部署到 1 核 1G 服务器（可选）
+## 常见问题
 
-自建不需要 Turso，直接本地 SQLite：
+**Q：为什么不用服务器/SQLite 了？**
+GitHub Pages 只托管静态文件。要零运维和免费，就把数据生成挪到构建期（Actions），前端读静态 JSON。
 
-```bash
-git clone -b dist https://github.com/ice-a/trading.git /opt/liaowangtai
-cd /opt/liaowangtai
-cp .env.example .env                        # DB_PATH=data/app.db
-node scripts/db-cli.mjs init && node scripts/db-cli.mjs seed
-pm2 start deploy/ecosystem.config.cjs
-pm2 save && pm2 startup
-```
+**Q：数据多久更新？**
+`pages.yml` 每小时跑一次（抓取+部署）。注意 GitHub 的定时任务**不保证准点**，高峰可能延迟几十分钟；仓库 60 天无提交会暂停定时任务。
 
-`deploy/` 里还有 `Caddyfile`、`deploy.sh`、`liaowangtai.systemd.service`（备选）。
+**Q：`/github` 页的 Token 存哪？**
+只存在浏览器 localStorage，请求时直连 GitHub，不经过任何第三方服务器。
 
-> `dist` 分支只放构建产物（自包含依赖），服务器不需要 `npm install`。
-> 本地发版 `./scripts/publish-dist.sh`，服务器更新 `./update.sh`。
+**Q：首页「刷新」按钮现在做什么？**
+静态站没有可抓的后端，刷新 = 清前端缓存并重读一次 `bundle.json`（破浏览器缓存）。真正的数据更新由 Actions 定时完成。
 
----
-
-## 数据模型
-
-5 张表，见 [`db/schema.sql`](db/schema.sql)。
-
-| 表 | 用途 | 主键 |
-| --- | --- | --- |
-| `trending_repos` | 榜单仓库（日/周/月 × 日期） | `(date, period, repo_key)` |
-| `crawl_runs` | 抓取日志 | `id` |
-| `app_meta` | 运行元信息（上次抓取时间等） | `key` |
-| `crawl_locks` | 抓取锁（防并发） | `name` |
-| `response_cache` | 跨实例响应缓存 | `key` |
-
-榜单行语义：`bucket` = `0` 前 N 名 / `1` 榜内其他 / `2` 已掉榜；`dropped` 掉榜标记；`snapshots` 最近 48 个采样点。
-
----
-
-## API
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/trending` | 单周期榜单（`date`/`period`/`page`） |
-| GET | `/api/trending-bundle` | 日/周/月三份一次取回 |
-| GET | `/api/history` | 历史总览 |
-| GET | `/api/hitokoto` | 一言 |
-| GET | `/api/github-search` · `/api/repos` | GitHub 查询 |
-| POST | `/api/refresh` | 页面按需刷新（1 小时节流，`?force=1`） |
-| GET/POST | `/api/crawl` | 强制抓取（`token` 鉴权） |
-| GET | `/api/cron` | Vercel Cron 入口（`Bearer CRON_SECRET`） |
-| GET | `/api/health` · `/api/status` | 自检 / 调度状态 |
-
----
-
-## 目录结构
-
-```
-├─ app/                 # 前端：4 个页面 + 组件
-├─ server/
-│  ├─ api/              # 同源 Nitro 路由
-│  ├─ utils/
-│  │  ├─ db.ts          # 双模式数据层（file: node:sqlite / remote: libSQL）
-│  │  ├─ crawler.ts     # 抓取编排（锁 → 抓 → upsert → 日志）
-│  │  ├─ trending.ts    # GitHub Trending 解析
-│  │  └─ …
-│  └─ plugins/scheduler.ts   # 仅自建环境启用进程内定时器
-├─ db/schema.sql · seed.sql
-├─ deploy/              # 自建方案（pm2 / Caddy / systemd）
-├─ scripts/             # db-cli / crawl-once / verify-sql / publish-dist
-├─ vercel.json          # cron（Hobby 每天 1 次）
-└─ nuxt.config.ts       # preset 随 VERCEL 环境切换
-```
-
----
-
-## FAQ
-
-**Q：为什么 Vercel 上不能用 SQLite 文件？**
-Serverless 函数没有持久磁盘，`/tmp` 只在单次调用内有效，实例随时销毁重建。所以必须用远程库 —— Turso 是 libSQL（SQLite 语法），schema 零改动。
-
-**Q：Turso 免费额度够吗？**
-500MB 存储 + 10 亿行读/月。这个站点一天几十行写入、页面读几十次，绰绰有余。
-
-**Q：抓取会不会超时？**
-GitHub Trending 一次抓 3 个周期约 3~5 秒。`nuxt.config` 里已给 Vercel 函数配了 `maxDuration: 60`、`memory: 1024`。
-
-**Q：Vercel 上还要 pm2 吗？**
-不需要。`deploy/` 那套是给自建服务器的，Vercel 上完全不生效。
-
-**Q：本地构建报 `node:sqlite` 找不到？**
-需要 Node ≥ 22.5。Node 22.x 要加 `--experimental-sqlite`，Node 23+ 默认可用。
+**Q：还能部署到自己的小服务器吗？**
+`server/` 目录和 `deploy/`（systemd/Caddy）配置仍保留，但当前 `nuxt.config.ts` 已切到静态 SPA + `static` preset。若要回到 SSR 单机，需要把 `ssr` 改回 `true`、preset 改回 `node-server`，并恢复页面的 `/api/*` 调用。

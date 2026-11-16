@@ -1,4 +1,4 @@
-import { withDbCache } from '../utils/cache'
+import { withCache } from '../utils/cache'
 import { getDayRepos, listDays } from '../utils/store'
 import { dayKeyOf, humanDay, isValidDayKey, relativeTime } from '../utils/date'
 import type { Bucket, TrendingRepoView, TrendingPeriod } from '../utils/types'
@@ -8,8 +8,7 @@ import type { Bucket, TrendingRepoView, TrendingPeriod } from '../utils/types'
  *
  * 一次返回 daily / weekly / monthly 三个周期的完整榜单。
  *
- * 为什么要这个接口：首页切换日/周/月时，原来每切一次都要发一次 SSR 请求 + 查一次库，
- * 部署在 Serverless 上还会叠加冷启动，表现为「切换很卡」。
+ * 为什么要这个接口：首页切换日/周/月时，原来每切一次都要发一次 SSR 请求 + 查一次库。
  * 三个周期加起来也就 40~60 条记录（几十 KB），一次取全、前端本地切换，切换就没有等待了。
  *
  * SQLite 版：三条按 (date, period) 主键前缀的查询 + 一条日期列表，共 4 次往返。
@@ -32,7 +31,7 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=60, stale-while-revalidate=300')
 
-  return withDbCache(`trending-bundle:${date}:${pageSize}`, 10 * 60_000, async () => {
+  return withCache(`trending-bundle:${date}:${pageSize}`, 10 * 60_000, async () => {
     const [daily, weekly, monthly, days] = await Promise.all([
       getDayRepos(date, 'daily'),
       getDayRepos(date, 'weekly'),

@@ -2,13 +2,11 @@
  * 建表语句（编译进产物，不依赖 db/ 目录）。
  *
  * 为什么内联成 TS 字符串而不是读 db/schema.sql：
- *   构建产物里没有 db/ 目录（Vercel 只上传 .output），
- *   而 SQLite / libSQL 都支持 CREATE TABLE IF NOT EXISTS，
- *   把 DDL 编进代码后，任何空库在首次访问时都能自愈。
+ *   构建产物里没有 db/ 目录，把 DDL 编进代码后任何空库在首次访问时都能自愈。
  *
  * 与 db/schema.sql 保持同步：改表结构时两处都要改（scripts/verify-sql.mjs 会校验）。
  */
-export const SCHEMA_VERSION = '5.0.0'
+export const SCHEMA_VERSION = '6.0.0'
 
 export const SCHEMA_DDL = [
   `CREATE TABLE IF NOT EXISTS trending_repos (
@@ -70,13 +68,5 @@ export const SCHEMA_DDL = [
     token      TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS response_cache (
-    key        TEXT PRIMARY KEY,
-    value      TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_cache_exp ON response_cache (expires_at)`
+  )`
 ]

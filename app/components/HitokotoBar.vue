@@ -6,11 +6,7 @@
  * compact 模式：嵌入顶栏品牌区与页签之间 —— 透明底、单行截断、高度贴合栏高；
  * 仍挂在 AppHeader（全局常驻），切页时组件不重建、计时器不重置。
  */
-interface Quote {
-  text: string
-  from: string
-  source: 'remote' | 'local'
-}
+import { fetchHitokoto, type Quote } from '~/utils/hitokoto'
 
 interface Props {
   /** 紧凑模式：嵌在顶栏里 */
@@ -33,7 +29,7 @@ let tickTimer: ReturnType<typeof setInterval> | null = null
 async function load() {
   fading.value = true
   try {
-    const data = await $fetch<Quote>('/api/hitokoto')
+    const data = await fetchHitokoto()
     if (data?.text) quote.value = data
   } catch {
     /* 拿不到就保留上一句 */

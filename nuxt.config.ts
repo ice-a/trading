@@ -1,41 +1,34 @@
 import { defineNuxtConfig } from 'nuxt/config'
 
 /**
- * 观澜志 · 单机全栈配置
+ * 观澜志 · GitHub Pages 静态站配置
  *
- * 形态：一个 Nuxt 应用（Vue 页面 + Nitro API）编译成一个 Node 进程，
- *       数据落本地 SQLite 单文件，Caddy 反代 127.0.0.1:3000。
+ * 形态：Nuxt 构建成纯 SPA（ssr:false），数据来自构建期生成的
+ *       public/data/bundle.json，全部托管在 GitHub Pages —— 没有服务器、没有数据库。
  *
- * 目标机器：1 核 1G。因此：
- *   · 构建产物在本地/CI 打包，不在服务器上跑 nuxt build（1G 会 OOM）
- *   · 运行时只跑一个进程（SQLite 单连接，不支持多副本）
- *   · 压缩交给 Caddy（zstd/gzip），Node 不再做二次压缩
+ * 数据来源：GitHub Actions 定时跑 scripts/generate-static-data.mjs
+ *           （cheerio/slim 抓 GitHub Trending → 写 JSON → 提交）。
+ *
+ * baseURL：
+ *   · 项目站 https://<user>.github.io/<repo>/  → /<repo>/（Actions 注入 BASE_PATH）
+ *   · 自定义域名                                → /
  */
+
+const basePath = process.env.BASE_PATH || '/'
+
 export default defineNuxtConfig({
   compatibilityDate: '2025-10-01',
   devtools: { enabled: false },
+  sourcemap: false,
 
-  // 前后端不分离：页面在服务端渲染，数据在同进程内直接读 SQLite
-  ssr: true,
+  // 静态站标记：server 层的定时器 / 建表中间件据此在构建期直接跳过
+  runtimeConfig: { staticSite: true },
 
-  css: ['~/assets/css/main.css'],
-
-  nitro: {
-    // Vercel 上用 vercel preset（Serverless Functions），自建服务器用 node-server
-    preset: process.env.VERCEL ? 'vercel' : 'node-server',
-
-    // Vercel 函数配置：抓取接口要跑 3~5 秒，冷启动叠加后可能超默认 10 秒
-    vercel: {
-      functions: { maxDuration: 60, memory: 1024 }
-    },
-
-    // 静态资源（.output/public）由 Nitro 直接服务；压缩交给前置的 Caddy
-    compressPublicAssets: false,
-
-    // 进程内定时抓取由 server/plugins/scheduler.ts 负责，不依赖平台 cron
-  },
+  // GitHub Pages 只托管静态文件：关掉 SSR，构建成 SPA
+  ssr: false,
 
   app: {
+    baseURL: basePath,
     head: {
       htmlAttrs: { lang: 'zh-CN' },
       title: 'GitHub 日榜简报',
@@ -48,5 +41,14 @@ export default defineNuxtConfig({
         }
       ]
     }
+  },
+
+  css: ['~/assets/css/main.css'],
+
+  nitro: {
+    // 纯静态产物：只生成 .output/public，无常驻 server
+    preset: 'static',
+    sourcemap: false,
+    compressPublicAssets: false
   }
 })

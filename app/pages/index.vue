@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { TrendingResponse } from '~~/server/utils/types'
+import { getBundle, getIntervalMinutes, clearBundleCache } from '~/utils/staticData'
 
 /**
  * 首页：今日榜单（默认）+ 历史日期 + 分页 + 一言。
- * 所有榜单数据都来自 SQLite（/api/trending），SSR 直连同源接口，前端不直接访问 GitHub。
+ * 静态站：榜单数据来自构建期生成的 bundle.json（无服务器、无 SQLite）。
  */
 
 const route = useRoute()
@@ -20,10 +21,8 @@ const period = ref<Period>(['daily', 'weekly', 'monthly'].includes(periodRaw) ? 
 const PERIOD_LABEL: Record<Period, string> = { daily: '日榜', weekly: '周榜', monthly: '月榜' }
 
 /**
- * 一次把三个周期都取回来（/api/trending-bundle）。
- *
- * 原来按周期单独请求，切一次日/周/月就要发一次 SSR 请求 + 查一次库，
- * 部署在 Serverless 上再叠冷启动，切换就很卡。现在切换纯前端，零等待。
+ * 一次把三个周期都取回来（bundle.json）。
+ * 切日/周/月纯前端切片，零网络等待。
  */
 interface BundleResponse {
   date: string
@@ -36,10 +35,7 @@ const bundleKey = computed(() => `trending-bundle:${dateParam.value || 'today'}:
 
 const bundleData = useCachedData<BundleResponse>(
   () => bundleKey.value,
-  () =>
-    $fetch<BundleResponse>('/api/trending-bundle', {
-      query: { date: dateParam.value || undefined, pageSize: 10 }
-    }),
+  () => getBundle(dateParam.value || undefined, page.value, 10),
   { ttl: 300_000 }
 )
 const { pending, error, refresh } = bundleData
@@ -51,12 +47,11 @@ const data = computed<TrendingResponse | null>(() => {
   return (b[period.value] ?? b.daily ?? null) as TrendingResponse | null
 })
 
-const hitokotoData = useCachedData(
+const { data: hitokoto } = useCachedData(
   () => 'hitokoto:first',
-  () => $fetch('/api/hitokoto'),
+  () => fetchHitokoto(),
   { ttl: 30_000 }
 )
-const { data: hitokoto } = hitokotoData
 
 /** URL 同步（刷新/分享能还原到同一页同一天） */
 /** 切换周期：回到第一页，保留已选日期 */
@@ -88,46 +83,26 @@ watch(period, (p) => {
 })
 
 /**
- * 按需刷新：单机部署后 /api/refresh 是同步抓取 —— 请求返回就代表数据已经是新的。
- *
- *   · 打开页面  → 调一次（服务端 1 小时节流，不到点直接返回 crawled:false）
- *   · 页面停留  → 每 1 小时自动调一次
- *   · 点「刷新」→ /api/refresh?force=1 立即抓
- *
- * 抓取耗时 4~20 秒，所以客户端超时放宽到 120 秒（与 Caddy 反代超时一致）。
- * 服务端抓完会清进程内缓存，这里拿到响应后重新取数即可。
+ * 静态站的刷新：数据由 GitHub Actions 每小时抓取并写进 bundle.json，
+ * 浏览器这边没有服务器可抓。刷新按钮 = 清缓存 + 重新读一次 JSON（带时间戳破缓存）。
  */
 const refreshing = ref(false)
 const refreshNote = ref('')
 
 async function reloadFromApi() {
   clearDataCache('trending-bundle')
+  clearBundleCache()
   await refresh()
 }
 
-async function pullRefresh(force = false) {
+async function pullRefresh() {
   if (refreshing.value) return
   refreshing.value = true
   refreshNote.value = ''
   try {
-    interface RefreshResult {
-      crawled?: boolean
-      target?: string
-      error?: string
-    }
-    const r: RefreshResult = await $fetch<RefreshResult>('/api/refresh', {
-      method: 'POST',
-      query: force ? { force: 1 } : {},
-      timeout: 120_000
-    }).catch((e) => ({ error: String(e?.message || e) } as RefreshResult))
-
-    if (r?.crawled) {
-      await reloadFromApi()
-      refreshNote.value = '数据已更新'
-      setTimeout(() => (refreshNote.value = ''), 4000)
-      return
-    }
-    if (r?.error) refreshNote.value = r.error
+    await reloadFromApi()
+    refreshNote.value = '已重新载入最新数据'
+    setTimeout(() => (refreshNote.value = ''), 4000)
   } finally {
     refreshing.value = false
   }
@@ -136,19 +111,11 @@ async function pullRefresh(force = false) {
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(async () => {
-  try {
-    const status = await $fetch<{ scheduler: { intervalMinutes: number } }>('/api/status')
-    intervalMinutes.value = status?.scheduler?.intervalMinutes ?? 60
-  } catch {
-    /* 忽略 */
-  }
-
-  // 打开页面即检查一次（服务端有 1 小时节流，不到点不会真的抓）
-  void pullRefresh(false)
+  intervalMinutes.value = await getIntervalMinutes().catch(() => 60)
   // 30 秒心跳：让「更新于 x 分钟前」自己往前走
   setInterval(() => (clientNow.value = Date.now()), 30_000)
-  // 停留期间每小时自动检查一次
-  refreshTimer = setInterval(() => void pullRefresh(false), 3600_000)
+  // 停留期间每小时自动重载一次 bundle（静态数据由 CI 定时更新）
+  refreshTimer = setInterval(() => void reloadFromApi(), 3600_000)
 })
 
 onBeforeUnmount(() => {
@@ -192,8 +159,7 @@ function changePage(p: number) {
 }
 
 async function manualRefresh() {
-  // 点刷新 = 强制立刻抓（不受 1 小时节流限制）
-  await pullRefresh(true)
+  await pullRefresh()
 }
 
 useHead({
@@ -307,7 +273,7 @@ useHead({
 
     <!-- 页脚 -->
     <template #foot>
-      <span>数据每小时写入 SQLite（按日期分区，掉出前 10 的记录只降级、不删除）</span>
+      <span>数据每小时由 GitHub Actions 抓取并生成静态文件（按日期分区，掉出前 10 的记录只降级、不删除）</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/history">查看历史榜单</NuxtLink>
       <span class="dot-sep">·</span>

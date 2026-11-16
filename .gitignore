@@ -27,6 +27,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
-# 本地数据：SQLite 库与备份
-data
+# 本地数据：根目录的 SQLite 库与备份（不影响 public/data 的静态 JSON）
+/data
 tmp

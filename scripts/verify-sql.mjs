@@ -2,7 +2,7 @@
  * schema + seed 自检（不需要云账号，也不需要起服务）。
  *
  * 用 Node 内置 SQLite（node:sqlite，Node ≥ 22.5）把 db/*.sql 真实跑一遍：
- *   1. 建表 → 断言 5 张表都在
+ *   1. 建表 → 断言 4 张表都在
  *   2. 灌 seed → 断言行数
  *   3. 再跑一次 seed → 断言幂等
  *   4. 源码 insert 的列数/值数对齐
@@ -19,7 +19,6 @@ const EXPECT_TABLES = [
   'app_meta',
   'crawl_locks',
   'crawl_runs',
-  'response_cache',
   'trending_repos'
 ]
 
@@ -45,7 +44,7 @@ const indexes = db
   .prepare("select name from sqlite_master where type='index' and name like 'idx_%'")
   .all()
   .map((r) => r.name)
-check('索引', indexes.length >= 4, `${indexes.length} 个：${indexes.join(', ')}`)
+check('索引', indexes.length >= 3, `${indexes.length} 个：${indexes.join(', ')}`)
 
 /* ---------- 1.5 内联 DDL 与 schema.sql 一致性 ----------
  * server/utils/schema.ts 里的 SCHEMA_DDL 是构建进产物的一份副本，

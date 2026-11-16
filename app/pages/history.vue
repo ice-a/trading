@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { TrendingResponse } from '~~/server/utils/types'
+import { getHistoryOverview, getTrendingDetail } from '~/utils/staticData'
 
 /**
  * /history —— 历史榜单
  *
  * 左侧：所有有数据的日期（含当天摘要）
  * 右侧：选中日期的完整榜单（复用首页的表格 + 分页组件）
+ * 静态站：数据来自构建期 bundle.json，无服务器。
  */
 
 interface HistoryDay {
@@ -35,9 +37,9 @@ const router = useRouter()
  * 客户端导航时旧页面会一直留在 DOM 里（表现就是「URL 变了但页面不切换」）。
  * 只在 SSR 阶段 await（保证数据进 payload），客户端走响应式更新。
  */
-const overviewData = useCachedData(
+const overviewData = useCachedData<HistoryOverview>(
   () => 'history:overview',
-  () => $fetch<HistoryOverview>('/api/history'),
+  () => getHistoryOverview(),
   { ttl: 120_000 }
 )
 const { data: overview, pending: loadingOverview } = overviewData
@@ -60,12 +62,9 @@ function changeDate(d: string) {
 }
 const page = ref(Math.max(1, Number(route.query.page) || 1))
 
-const detailData = useCachedData(
+const detailData = useCachedData<TrendingResponse>(
   () => `history:detail:${selected.value}:${page.value}`,
-  () =>
-    $fetch<TrendingResponse>('/api/trending', {
-      query: { date: selected.value || undefined, page: page.value }
-    }),
+  () => getTrendingDetail(selected.value, page.value),
   { ttl: 60_000 }
 )
 const { data: detail, pending } = detailData
@@ -196,7 +195,7 @@ useHead({
     </div>
 
     <template #foot>
-      <span>历史数据全部来自 SQLite，按日期分区留存</span>
+      <span>历史数据随静态站点发布，按日期分区留存</span>
       <span class="dot-sep">·</span>
       <NuxtLink to="/">返回今日榜单</NuxtLink>
     </template>

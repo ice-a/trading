@@ -1,4 +1,4 @@
-import { withDbCache } from '../utils/cache'
+import { withCache } from '../utils/cache'
 import { sqlAll } from '../utils/db'
 import { dayKeyOf, humanDay } from '../utils/date'
 
@@ -18,7 +18,7 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Cache-Control', 'public, max-age=30, stale-while-revalidate=120')
 
-  return withDbCache('history:overview:' + period, 65 * 60_000, async () => {
+  return withCache('history:overview:' + period, 65 * 60_000, async () => {
     const rows = await sqlAll<{
       date: string
       count: number

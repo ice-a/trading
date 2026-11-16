@@ -1,4 +1,4 @@
-import { withDbCache } from '../utils/cache'
+import { withCache } from '../utils/cache'
 import { env } from '../utils/env'
 
 /**
@@ -12,7 +12,7 @@ import { env } from '../utils/env'
  *   3. 都没有                                              → 匿名，10 次/分钟
  *
  * 限流时**不直接报错**，而是按 x-ratelimit-reset 等待后重试（所有人一起等）。
- * 但 Serverless 函数最长 10s，所以最多等 ~8s，超时才返回提示。
+ * 最多等 ~8s，超时才返回提示，避免请求长时间挂住。
  *
  * 安全：用户的 token 只在本次请求里用，不落库、不写日志。
  */
@@ -65,7 +65,7 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'public, max-age=120, stale-while-revalidate=600')
 
   // 结果与 token 无关，共用同一份缓存
-  return withDbCache(`gh-search:${keyword}:${sort}:${order}:${page}:${perPage}`, 15 * 60_000, async () => {
+  return withCache(`gh-search:${keyword}:${sort}:${order}:${page}:${perPage}`, 15 * 60_000, async () => {
     const url =
       'https://api.github.com/search/repositories?q=' +
       encodeURIComponent(keyword) +

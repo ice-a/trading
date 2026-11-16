@@ -5,7 +5,7 @@ import { invalidateCache } from '../utils/cache'
 /**
  * POST /api/refresh —— 按需刷新（页面打开 / 点刷新 / 每小时轮询共用）。
  *
- * 只抓 GitHub Trending：请求返回即代表数据已更新（本地 3~5 秒，Vercel 上 <10 秒）。
+ * 只抓 GitHub Trending：请求返回即代表数据已更新（约 3~5 秒）。
  *
  * 节流：默认 1 小时内不重复抓，避免多标签页把 GitHub 抓挂；`?force=1` 无条件抓。
  */

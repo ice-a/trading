@@ -1,0 +1,111 @@
+name: pages
+
+# 观澜志 · GitHub Pages 一条龙：抓取 → 提交数据 → 构建 → 部署。
+#
+# 为什么抓取和部署放在同一个 workflow：
+#   GITHUB_TOKEN 的 push 默认不会触发其他 workflow，若拆成两个，
+#   每小时抓到的新数据不会触发重新部署。合并后同一次运行里直接构建部署。
+#
+# 触发：
+#   · schedule  每小时第 15 分（UTC）抓一次并部署
+#   · push      手动改代码后 push 到 master，重新构建部署
+#   · workflow_dispatch  手动触发
+#
+# 可选配置（Settings → Secrets and variables → Actions → Variables）：
+#   CNAME                  自定义域名；有值则 baseURL=/ 并写产物 CNAME 文件
+#   APP_TIMEZONE           默认 Asia/Shanghai
+#   TOP_N / PAGE_SIZE      默认 10 / 10
+#   TRENDING_LANGUAGE      默认空（全部语言）
+#   UPDATE_INTERVAL_MINUTES 默认 60（仅前端展示用）
+
+on:
+  schedule:
+    - cron: '15 * * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+environment:
+  name: github-pages
+  url: ${{ steps.deployment.outputs.page_url }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 抓取并生成静态数据
+        env:
+          APP_TIMEZONE: ${{ vars.APP_TIMEZONE || 'Asia/Shanghai' }}
+          TOP_N: ${{ vars.TOP_N || '10' }}
+          PAGE_SIZE: ${{ vars.PAGE_SIZE || '10' }}
+          TRENDING_LANGUAGE: ${{ vars.TRENDING_LANGUAGE || '' }}
+          UPDATE_INTERVAL_MINUTES: ${{ vars.UPDATE_INTERVAL_MINUTES || '60' }}
+        run: node scripts/generate-static-data.mjs
+
+      - name: 提交数据到仓库
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/bundle.json
+          if git diff --cached --quiet; then
+            echo "::notice::数据无变化，跳过提交"
+          else
+            git commit -m "chore(data): 更新榜单数据 $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi
+
+      - name: 计算 baseURL
+        id: base
+        env:
+          CNAME: ${{ vars.CNAME }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          if [ -n "$CNAME" ]; then
+            echo "path=/" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=/$REPO/" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建静态站
+        env:
+          BASE_PATH: ${{ steps.base.outputs.path }}
+        run: npm run build
+
+      - name: 写入 CNAME（自定义域名时）
+        env:
+          CNAME: ${{ vars.CNAME }}
+        run: |
+          if [ -n "$CNAME" ]; then
+            printf '%s\n' "$CNAME" > .output/public/CNAME
+            echo "已写入 CNAME: $CNAME"
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .output/public
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

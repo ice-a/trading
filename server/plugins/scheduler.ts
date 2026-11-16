@@ -1,39 +1,28 @@
 import { runCrawl, crawlState } from '../utils/crawler'
 import { pingDb, ensureSchema } from '../utils/db'
-import { invalidateCache, pruneDbCache } from '../utils/cache'
+import { invalidateCache } from '../utils/cache'
 import { appConfig } from '../utils/config'
 import { envFlag } from '../utils/env'
 
 /**
- * 抓取调度（自建 / 常驻进程环境）。
+ * 抓取调度（单机常驻进程）。
  *
- * 功能裁剪后只需抓 GitHub Trending 三榜（一次请求全拿）。
- *
- * 环境差异：
- *   · 自建 Node（pm2 / systemd）：进程内 setInterval，启动抓一轮 + 每 N 分钟
- *   · Vercel 等 serverless：**没有常驻进程**，这里直接跳过，
- *     抓取由 vercel.json 的 Cron（Hobby 每天 1 次）或外部 cron 打 /api/crawl 完成
- *
+ * 启动时自检数据库并抓一轮，之后进程内 setInterval 每 N 分钟抓一次。
  * 并发保护：进程内 crawlState().running + 数据库 crawl_locks 行锁。
  */
 
 const FLAG = '__liaowangtai_scheduler__'
 
 export default defineNitroPlugin((nitroApp) => {
+  // 静态站没有服务器：构建期和运行时都不抓取，数据由 generate-static-data.mjs 生成。
+  // 避免 nuxt build 时开 SQLite 连接 / 跑网络请求把进程挂住。
+  if (useRuntimeConfig().staticSite) return
+
   const g = globalThis as Record<string, unknown>
   if (g[FLAG]) return
   g[FLAG] = true
 
   const cfg = appConfig()
-
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    console.log(
-      '[scheduler] serverless 环境：不启用进程内定时器。抓取由 vercel.json 的 cron（Hobby 每天 1 次）' +
-        '或外部 cron 打 /api/crawl 完成；想要小时级更新请用 cron-job.org / GitHub Actions。'
-    )
-    return
-  }
-
   const state = crawlState()
   const intervalMs = Math.max(cfg.updateIntervalMinutes, 1) * 60_000
   state.intervalMinutes = cfg.updateIntervalMinutes
@@ -63,7 +52,6 @@ export default defineNitroPlugin((nitroApp) => {
     }
     // 新数据已入库：清掉缓存
     invalidateCache('')
-    void pruneDbCache()
     state.nextRunAt = Date.now() + intervalMs
     console.log(
       `[scheduler] 本轮完成 ${Date.now() - started}ms，下次 ${new Date(state.nextRunAt).toLocaleString('zh-CN')}`
@@ -80,10 +68,10 @@ export default defineNitroPlugin((nitroApp) => {
     }
     const ping = await pingDb()
     if (!ping.ok) {
-      console.error(`[db] 自检失败（${ping.mode}）：${ping.error}`)
+      console.error(`[db] 自检失败：${ping.error}`)
       return false
     }
-    console.log(`[db] 就绪（${ping.mode}，${ping.latencyMs}ms）`)
+    console.log(`[db] 就绪（${ping.latencyMs}ms）`)
     return true
   }
 

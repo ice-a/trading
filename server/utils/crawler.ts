@@ -118,7 +118,7 @@ export async function runCrawl(trigger: CrawlRunDoc['trigger'] = 'schedule'): Pr
     let totalModified = 0
     let totalDropped = 0
 
-    // 三个周期并行抓：串行要 8~9s，并行约 3s，避免撞上 Serverless 函数超时
+    // 三个周期并行抓：串行要 8~9s，并行约 3s，减少单次抓取的阻塞时间
     const results = await Promise.all(
       periods.map(async (period) => {
         const repos = await fetchTrendingRepos({ since: period, language: cfg.trendingLanguage })

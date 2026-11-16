@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "4.0.0",
-  "description": "GitHub Trending 日榜简报 · Nuxt 全栈 + SQLite/libSQL（Vercel 或单机）",
+  "description": "GitHub Trending 日榜简报 · Nuxt 全栈 + 本地 SQLite（单机 512M/1G）",
   "engines": {
     "node": ">=22.5.0"
   },
@@ -17,15 +17,14 @@
     "db:reset": "node scripts/db-cli.mjs reset",
     "db:info": "node scripts/db-cli.mjs info",
     "db:shell": "node scripts/db-cli.mjs shell",
-    "turso:init": "bash scripts/init-turso.sh",
     "crawl": "node scripts/crawl-once.mjs",
+    "gen:data": "node scripts/generate-static-data.mjs",
     "typecheck": "nuxt prepare && tsc -p .nuxt/tsconfig.server.json --noEmit && vue-tsc -p .nuxt/tsconfig.app.json --noEmit",
     "verify:sql": "node scripts/verify-sql.mjs",
     "publish-dist": "bash scripts/publish-dist.sh",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "@libsql/client": "^0.18.0",
     "cheerio": "^1.0.0",
     "markdown-it": "^15.0.3",
     "nuxt": "^4.0.0",

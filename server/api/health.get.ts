@@ -8,8 +8,8 @@ export default defineEventHandler(async (event) => {
   setResponseStatus(event, ping.ok ? 200 : 503)
   return {
     ok: ping.ok,
-    runtime: process.env.VERCEL ? 'vercel' : 'node',
-    storage: info.mode === 'remote' ? 'libsql' : 'sqlite',
+    runtime: 'node',
+    storage: 'sqlite',
     db: info,
     latencyMs: ping.latencyMs,
     uptimeSec: Math.round(process.uptime()),

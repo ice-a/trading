@@ -1,9 +1,9 @@
 name: hourly-crawl
 
-# 通用兜底调度：不依赖平台自带 cron，Vercel / Cloudflare / 任意主机都能用。
+# 可选兜底调度：单机默认用进程内定时器，这个 workflow 只是外部触发的备用方案。
 # 在仓库 Settings → Secrets 里配置：
-#   SITE_URL    例如 https://your-app.vercel.app
-#   CRON_TOKEN  与部署环境里的 CRON_TOKEN / CRON_SECRET 保持一致
+#   SITE_URL    例如 https://your-domain.com
+#   CRON_TOKEN  与部署环境 .env 里的 CRON_TOKEN 保持一致
 #
 # 想改频率就改下面的 cron 表达式：`0 * * * *` = 每小时整点。
 

@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { fetchUserRepos, searchRepos as searchReposApi } from '~/utils/githubApi'
+
 /**
  * /github —— 热门 GitHub 用户 + 公开仓库列表
  *
+ * 静态站：浏览器直连 GitHub 官方 API（用户 token 走本地 localStorage）。
  * 只保留仓库搜索：默认看 ice-a，可换任意 GitHub 用户。
  */
 
@@ -39,7 +42,7 @@ const sortBy = ref<'pushed' | 'stars' | 'name'>('pushed')
 
 /* ============================================================
  * GitHub 全站搜索
- *   有搜索词 → 展示 /api/github-search 的结果
+ *   有搜索词 → 展示 GitHub Search API 的结果
  *   无搜索词 → 展示当前用户的仓库
  * ========================================================== */
 interface SearchResult {
@@ -104,13 +107,7 @@ async function doSearch() {
 
   searching.value = true
   try {
-    const headers: Record<string, string> = {}
-    if (ghToken.value.trim()) headers['x-github-token'] = ghToken.value.trim()
-
-    searchResult.value = await $fetch<SearchResult>('/api/github-search', {
-      query: { q: kw },
-      headers
-    })
+    searchResult.value = await searchReposApi(kw, ghToken.value.trim())
   } catch (e) {
     searchResult.value = {
       ok: false,
@@ -146,12 +143,9 @@ onMounted(() => {
 })
 
 
-const reposData = useCachedData(
+const reposData = useCachedData<ReposResponse>(
   () => `repos:${currentUser.value}:${sortBy.value}`,
-  () =>
-    $fetch<ReposResponse>('/api/repos', {
-      query: { user: currentUser.value, sort: sortBy.value }
-    }),
+  () => fetchUserRepos(currentUser.value, sortBy.value, ghToken.value.trim()),
   { ttl: 600_000 }
 )
 const repos = reposData.data

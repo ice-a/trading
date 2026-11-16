@@ -1,7 +1,7 @@
 /**
  * 服务端配置读取（功能裁剪版）。
  *
- * 配置来源只有两条：`.env` 文件（启动时载入 process.env）与 shell / systemd / Vercel 注入的变量。
+ * 配置来源只有两条：`.env` 文件（启动时载入 process.env）与 shell / systemd 注入的变量。
  */
 
 import { env, envFlag, envInt } from './env'
@@ -32,8 +32,7 @@ export function appConfig(): AppConfig {
     pageSize: envInt('PAGE_SIZE', 10),
     timezone: env('APP_TIMEZONE', 'Asia/Shanghai'),
     hitokotoEndpoint: env('HITOKOTO_ENDPOINT', 'https://v1.hitokoto.cn/'),
-    // 一个值两种叫法：Vercel 习惯 CRON_SECRET，外部 cron 习惯 CRON_TOKEN。
-    // 任一存在即启用鉴权；都不配才不校验（仅限本机调试）。
-    cronToken: env('CRON_TOKEN', '') || env('CRON_SECRET', '')
+    // 抓取接口的鉴权令牌；不配则不校验（仅限本机调试）。
+    cronToken: env('CRON_TOKEN', '')
   }
 }

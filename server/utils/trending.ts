@@ -1,5 +1,5 @@
 import { env } from './env'
-import * as cheerio from 'cheerio'
+import { load } from 'cheerio/slim'
 import type { ParsedRepo } from './types'
 import { httpFetch } from './http'
 
@@ -70,7 +70,7 @@ export function buildTrendingUrl(opts: FetchOptions = {}): string {
 
 /** 核心解析：把 trending 页面 HTML 变成结构化数组（返回顺序即榜内名次） */
 export function parseTrendingHtml(html: string): ParsedRepo[] {
-  const $ = cheerio.load(html)
+  const $ = load(html)
   const out: ParsedRepo[] = []
   const seen = new Set<string>()
 

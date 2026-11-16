@@ -3,19 +3,13 @@ import { invalidateCache } from '../utils/cache'
 import { env } from '../utils/env'
 
 /**
- * GET /api/cron —— Vercel Cron 专用入口。
+ * GET /api/cron —— 外部定时触发抓取的入口（可选）。
  *
- * Vercel 的 Cron 不支持自定义 header，但它会在请求里带上
- *   Authorization: Bearer $CRON_SECRET
- * （前提：在 Vercel 项目里配置了 CRON_SECRET 环境变量）。
- *
- * Hobby（免费）计划限制：**cron 每天只能触发一次**，表达式必须是「每天某点」。
- * 想要小时级更新，用外部免费 cron（cron-job.org / UptimeRobot）打
- *   POST /api/crawl?token=<CRON_TOKEN>
- * 或者 GitHub Actions 定时 curl。
+ * 单机默认靠进程内定时器抓取；如果你用 cron-job.org / UptimeRobot 之类的
+ * 外部服务按小时触发，可以用这个接口，带 Authorization: Bearer <CRON_TOKEN>。
  */
 export default defineEventHandler(async (event) => {
-  const secret = (env('CRON_SECRET', '') || env('CRON_TOKEN', '')).trim()
+  const secret = env('CRON_TOKEN', '').trim()
 
   if (secret) {
     const auth = String(getHeader(event, 'authorization') || '')
