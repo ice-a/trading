@@ -30,3 +30,6 @@ Thumbs.db
 # 本地数据：根目录的 SQLite 库与备份（不影响 public/data 的静态 JSON）
 /data
 tmp
+
+# 数据库导出文件（临时，不入库）
+*.db
